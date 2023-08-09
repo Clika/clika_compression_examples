@@ -58,6 +58,10 @@ class DATASET_WRAPPER(SalObjDataset):
         super().__init__(*attrs, **kwargs)
 
     def __getitem__(self, item):
+        """
+        returning a tuple of (sample,label) to conform with CLIKA Compression constraints,
+        https://docs.clika.io/docs/next/compression-constrains/cco_inputs_requirements#Dataset-Dataloader
+        """
         d = super().__getitem__(item)
         return d["image"].float(), d["label"].float()
 

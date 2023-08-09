@@ -84,6 +84,11 @@ class MultiClassAccuracy(torchmetrics.classification.accuracy.MulticlassAccuracy
 
 
 def get_loader(config, train=True):
+    """
+    factory function to return train/eval dataloaders
+
+    https://github.com/pytorch/vision/blob/2030d208ba1044b97b8ceab91852858672a56cc8/references/classification/train.py#L217-L219
+    """
     global VAL_RESIZE_SIZE, VAL_CROP_SIZE, TRAIN_CROP_SIZE
 
     train_dir = os.path.join(config.data, "train")

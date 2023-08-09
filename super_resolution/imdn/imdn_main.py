@@ -46,6 +46,11 @@ DEPLOYMENT_DICT = {
 # Define Class/Function Wrappers
 # ==================================================================================================================== #
 def replace_CCALayer(model):
+    """
+    Currently not supported operation
+    Replace with identity layer
+    https://github.com/Zheng222/IMDN/blob/8f158e6a5ac9db6e5857d9159fd4a6c4214da574/model/block.py#L82-L86
+    """
     for n, m in model.named_children():
         if isinstance(m, CCALayer):
             m.contrast = torch.nn.Identity()
@@ -96,6 +101,10 @@ class REDS(Dataset):
         self.dir_lr = sorted((str(f) for f in dir_lr.rglob('*.png')))
 
     def __getitem__(self, idx):
+        """
+        returning a tuple of (sample,label) to conform with CLIKA Compression constraints,
+        https://docs.clika.io/docs/next/compression-constrains/cco_inputs_requirements#Dataset-Dataloader
+        """
         hr_img = Image.open(self.dir_hr[idx])
         lr_img = Image.open(self.dir_lr[idx])
 

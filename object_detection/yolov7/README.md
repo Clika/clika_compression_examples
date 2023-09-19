@@ -4,7 +4,8 @@
 
 # Requirements
 
-- Install CLIKA SDK (https://docs.clika.io/docs/installation)
+- Python >= 3.8
+- CLIKA SDK (https://docs.clika.io/docs/installation)
 - Clone YOLOv7 project & Install dependencies
 ```
 # pwd: object_detection/yolov7

@@ -24,10 +24,10 @@ BASE_DIR = Path(__file__).parent
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
 DEPLOYMENT_DICT = {
-    'trt': DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
+    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
                                             graph_description=None,
                                             input_shapes_for_deployment=[(None, 1, 28, 28)]),
-    'tflite': DeploymentSettings_TFLite(graph_author="CLIKA",
+    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
                                         graph_description=None,
                                         input_shapes_for_deployment=[(None, 1, 28, 28)])
 }
@@ -103,6 +103,8 @@ def resume_compression(
         eval_losses: COMPDTYPE = None,
         eval_metrics: COMPDTYPE = None
 ):
+    engine = PyTorchCompressionEngine()
+
     mcs = ModelCompileSettings(
         optimizer=None,
         training_losses=train_losses,
@@ -110,8 +112,6 @@ def resume_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
-
     final = engine.resume(
         clika_state_path=config.ckpt,
         model_compile_settings=mcs,
@@ -141,7 +141,10 @@ def run_compression(
         eval_metrics: COMPDTYPE = None
 ):
     global DEPLOYMENT_DICT
+
+    engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
+
     settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
@@ -165,9 +168,7 @@ def run_compression(
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
 
-    engine = PyTorchCompressionEngine()
-
-    # skipping the quantization of the last layer to achieve better performance
+    # Skip quantization for last layers
     settings.set_quantization_settings_for_layer("linear_1", LayerQuantizationSettings(skip_quantization=True))
 
     mcs = ModelCompileSettings(
@@ -184,7 +185,7 @@ def run_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        is_training_from_scratch=config.train_from_scratch,
+        is_training_from_scratch=config.train_from_scratch
     )
     engine.deploy(
         clika_state_path=final,
@@ -219,7 +220,7 @@ def main(config):
             warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
             resume_compression_flag = True
         else:
-            print(f'loading ckpt from {config.ckpt}')
+            print(f"loading ckpt from {config.ckpt}")
             state_dict = torch.load(config.ckpt)
             model.load_state_dict(state_dict["model"])
 
@@ -280,11 +281,10 @@ def main(config):
         )
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CLIKA MNIST Example')
-    parser.add_argument('--target_framework', type=str, default='trt', choices=["tflite", "trt"],
-                        help='choose the targe frame work TensorFlow Lite or TensorRT')
-    parser.add_argument("--data", type=str, default='.', help="Dataset directory")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CLIKA MNIST Example")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
+    parser.add_argument("--data", type=str, default=".", help="Dataset directory")
 
     # CLIKA Engine Training Settings
     parser.add_argument("--steps_per_epoch", type=int, default=None, help="Number of steps per epoch")
@@ -296,7 +296,7 @@ if __name__ == '__main__':
     parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
     parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
     parser.add_argument("--grads_acc_steps", type=int, default=1, help="Number of gradient accumulation steps (default: 1)")
-    parser.add_argument("--mixed_precision", action="store_true", default=False, help="Use Mixed Precision")
+    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
     parser.add_argument("--lr_warmup_epochs", type=int, default=0, help="Learning Rate used in the Learning Rate Warmup stage (default: 0)")
     parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=0, help="Number of steps per epoch used in the Learning Rate Warmup stage")
     parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")

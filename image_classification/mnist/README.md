@@ -4,6 +4,7 @@
 
 # Requirements
 
+- Python >= 3.8
 - Install PyTorch [pytorch.org](https://pytorch.org/)
 - `pip install -r image_classification/mnist/requirements.txt`
 
@@ -34,5 +35,4 @@ python3 mnist_main.py
 
 # References
 
-https://pytorch.org/vision/stable/generated/torchvision.datasets.MNIST.html
 https://github.com/pytorch/examples/tree/main/mnist

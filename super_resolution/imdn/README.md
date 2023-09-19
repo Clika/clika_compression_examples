@@ -4,7 +4,8 @@
 
 # Requirements
 
-- Install CLIKA SDK (https://docs.clika.io/docs/installation)
+- Python == 3.8
+- CLIKA SDK (https://docs.clika.io/docs/installation)
 - Clone IMDN project & Install dependencies
 ```
 # pwd: super_resolution/imdn

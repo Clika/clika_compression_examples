@@ -30,7 +30,7 @@ import transforms
 import utils
 
 NUM_CLASSES = 1000  # imagenet 1k
-CHOSEN_MODEL_SIZE: str = "l_32"
+CHOSEN_MODEL_SIZE: str = "b_16"
 MODEL_DICT = {
     "b_16": {
         "torchvision_model_name": "vit_b_16",
@@ -58,7 +58,7 @@ MODEL_DICT = {
         "weight_decay": None,
         "norm_weight_decay": None,
         "optimizer": "sgd",
-        "skip_quantization_layers": []
+        "skip_quantization_layers": ["linear_48"]
     },
     "l_32": {
         "torchvision_model_name": "vit_l_32",
@@ -214,6 +214,9 @@ def resume_compression(
         eval_losses: COMPDTYPE = None,
         eval_metrics: COMPDTYPE = None
 ):
+
+    engine = PyTorchCompressionEngine()
+
     mcs = ModelCompileSettings(
         optimizer=None,
         training_losses=train_losses,
@@ -221,8 +224,6 @@ def resume_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
-
     final = engine.resume(
         clika_state_path=config.ckpt,
         model_compile_settings=mcs,
@@ -253,6 +254,7 @@ def run_compression(
         eval_metrics: COMPDTYPE = None
 ):
     global DEPLOYMENT_DICT
+
     engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
 
@@ -282,6 +284,7 @@ def run_compression(
     layer_settings = LayerSettings(
         quantization_settings=LayerQuantizationSettings(skip_quantization=True)
     )
+    # Skip quantization for last layers
     layer_names_to_skip = model_info["skip_quantization_layers"]
     settings.layer_settings = {name: layer_settings for name in layer_names_to_skip}
 
@@ -292,7 +295,6 @@ def run_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-
     final = engine.optimize(
         output_path=config.output_dir,
         settings=settings,
@@ -302,7 +304,6 @@ def run_compression(
         init_evaluation_dataset_fn=get_eval_loader,
         is_training_from_scratch=config.train_from_scratch
     )
-
     engine.deploy(
         clika_state_path=final,
         output_dir_path=config.output_dir,
@@ -319,16 +320,16 @@ def main(config):
     print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
 
     if config.data is None:
-        imagenet_path = BASE_DIR / 'ILSVRC/Data/CLS-LOC'
-        imagenette_path = BASE_DIR / 'imagenette2-160'
+        imagenet_path = BASE_DIR / "ILSVRC/Data/CLS-LOC"
+        imagenette_path = BASE_DIR / "imagenette2-160"
         if imagenet_path.exists():
             config.data = str(imagenet_path)
-            print(f'setting {config.data} as default dataset')
+            print(f"setting {config.data} as default dataset")
         elif imagenette_path.exists():
             config.data = str(imagenette_path)
-            print(f'setting {config.data} as default dataset')
+            print(f"setting {config.data} as default dataset")
         else:
-            raise FileNotFoundError('Could not set default dataset path. Please confirm data folders exist.')
+            raise FileNotFoundError("Could not set default dataset path. Please confirm data folders exist.")
     else:
         config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
 
@@ -356,7 +357,7 @@ def main(config):
             warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
             resume_compression_flag = True
         else:
-            print(f'loading ckpt from {config.ckpt}')
+            print(f"loading ckpt from {config.ckpt}")
             state_dict = torch.load(config.ckpt)
             model.load_state_dict(state_dict["model"])
 
@@ -439,9 +440,9 @@ def main(config):
         )
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CLIKA EfficientNet Example')
-    parser.add_argument('--target_framework', type=str, default='trt', choices=["tflite", "trt"], help='choose the targe frame work TensorFlow Lite or TensorRT')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CLIKA EfficientNet Example")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default=None, help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -450,21 +451,14 @@ if __name__ == '__main__':
     parser.add_argument("--stats_steps", type=int, default=100, help="Number of steps for scans")
     parser.add_argument("--print_interval", type=int, default=50, help="COE print log interval")
     parser.add_argument("--ma_window_size", type=int, default=20, help="Number of steps for averaging print")
-    parser.add_argument("--save_interval", type=int, default=1,
-                        help="Save interval compressed files each X epoch as .pompom files")
-    parser.add_argument("--reset_train_data", action="store_true", default=False,
-                        help="Reset training dataset between epochs")
-    parser.add_argument("--reset_eval_data", action="store_true", default=False,
-                        help="Reset evaluation dataset between epochs")
-    parser.add_argument("--grads_acc_steps", type=int, default=1,
-                        help="Number of gradient accumulation steps (default: 1)")
-    parser.add_argument("--mixed_precision", action="store_true", default=True, help="Use Mixed Precision")
-    parser.add_argument("--lr_warmup_epochs", type=int, default=1,
-                        help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
-    parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500,
-                        help="Number of steps per epoch used in the Learning Rate Warmup stage")
-    parser.add_argument("--fp16_weights", action="store_true", default=False,
-                        help="Use FP16 weight (can reduce VRAM usage)")
+    parser.add_argument("--save_interval", type=int, default=1, help="Save interval compressed files each X epoch as .pompom files")
+    parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
+    parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
+    parser.add_argument("--grads_acc_steps", type=int, default=1, help="Number of gradient accumulation steps (default: 1)")
+    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
+    parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
+    parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
+    parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")
     parser.add_argument("--gradients_checkpoint", action="store_true", default=False, help="Use gradient checkpointing")
 
     # Model Training Setting
@@ -472,19 +466,14 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and evaluation (default: 8)")
     parser.add_argument("--eval_batch_size", type=int, default=64, help="Batch size for evaluation (default: 64)")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
-    parser.add_argument("--workers", type=int, default=4,
-                        help="Number of worker processes for data loading (default: 4)")
-    parser.add_argument("--ckpt", type=str, default=None,
-                        help="Path to load the model checkpoints (e.g. .pth, .pompom)")
-    parser.add_argument("--output_dir", type=str, default="outputs",
-                        help="Output directory for saving results and checkpoints (default: outputs)")
+    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
+    parser.add_argument("--ckpt", type=str, default=None, help="Path to load the model checkpoints (e.g. .pth, .pompom)")
+    parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
     parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
 
     # Quantization Config
-    parser.add_argument("--weights_num_bits", type=int, default=8,
-                        help="How many bits to use for the Weights for Quantization")
-    parser.add_argument("--activations_num_bits", type=int, default=8,
-                        help="How many bits to use for the Activation for Quantization")
+    parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")
+    parser.add_argument("--activations_num_bits", type=int, default=8, help="How many bits to use for the Activation for Quantization")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:

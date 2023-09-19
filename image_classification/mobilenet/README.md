@@ -7,7 +7,8 @@ related operation and to add weight decay in order to conform with the state-of-
 
 # Requirements
 
-- Install CLIKA SDK (https://docs.clika.io/docs/installation)
+- Python >= 3.8
+- CLIKA SDK (https://docs.clika.io/docs/installation)
 - `pip install -r image_classification/mobilenet/requirements.txt`
 - download dependencies from pytorch/vision
 

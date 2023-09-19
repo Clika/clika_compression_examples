@@ -34,12 +34,12 @@ SCALE = 4
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
 DEPLOYMENT_DICT = {
-    'trt': DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
+    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
                                             graph_description=None,
-                                            input_shapes_for_deployment=[(None, 1, None, None)]),
-    'tflite': DeploymentSettings_TFLite(graph_author="CLIKA",
+                                            input_shapes_for_deployment=[(None, 3, None, None)]),
+    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
                                         graph_description=None,
-                                        input_shapes_for_deployment=[(None, 1, None, None)])
+                                        input_shapes_for_deployment=[(None, 3, None, None)])
 }
 
 
@@ -95,10 +95,10 @@ class REDS(Dataset):
         :param data_dir: test data folder
         """
         data_dir = Path(data_dir)
-        dir_hr = data_dir.joinpath('GT')
-        self.dir_hr = sorted((str(f) for f in dir_hr.rglob('*.png')))
-        dir_lr = data_dir.joinpath(f'sharp_bicubic')
-        self.dir_lr = sorted((str(f) for f in dir_lr.rglob('*.png')))
+        dir_hr = data_dir.joinpath("GT")
+        self.dir_hr = sorted((str(f) for f in dir_hr.rglob("*.png")))
+        dir_lr = data_dir.joinpath(f"sharp_bicubic")
+        self.dir_lr = sorted((str(f) for f in dir_lr.rglob("*.png")))
 
     def __getitem__(self, idx):
         """
@@ -164,6 +164,8 @@ def run_compression(
         eval_metrics: COMPDTYPE = None
 ):
     global DEPLOYMENT_DICT
+
+    engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
 
     settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
@@ -188,9 +190,8 @@ def run_compression(
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
 
-    names_to_skip = [
-        # "conv2d_33", "pixel_shuffle"
-    ]
+    # Skip quantization for last layers
+    names_to_skip = ["conv_45", "pixel_shuffle"]
     skip_quantization = LayerSettings(quantization_settings=LayerQuantizationSettings(skip_quantization=True))
     for n in names_to_skip:
         settings.set_layer_settings(n, skip_quantization)
@@ -202,7 +203,6 @@ def run_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
     final = engine.optimize(
         output_path=config.output_dir,
         settings=settings,
@@ -210,6 +210,8 @@ def run_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
+        is_training_from_scratch=config.train_from_scratch
+
     )
     engine.deploy(
         clika_state_path=final,
@@ -228,7 +230,7 @@ def main(config):
 
     config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
     if os.path.exists(config.data) is False:
-        raise FileNotFoundError('Could not find default dataset please check `--data`')
+        raise FileNotFoundError("Could not find default dataset please check `--data`")
 
     config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
 
@@ -246,7 +248,7 @@ def main(config):
             warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
             resume_compression_flag = True
         else:
-            print(f'loading ckpt from {config.ckpt}')
+            print(f"loading ckpt from {config.ckpt}")
             state_dict = load_state_dict(config.ckpt)
             model.load_state_dict(state_dict)
 
@@ -310,9 +312,9 @@ def main(config):
         )
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CLIKA IMDN Example')
-    parser.add_argument('--target_framework', type=str, default='trt', choices=["tflite", "trt"], help='choose the targe frame work TensorFlow Lite or TensorRT')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CLIKA IMDN Example")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default="dataset", help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -325,7 +327,7 @@ if __name__ == '__main__':
     parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
     parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
     parser.add_argument("--grads_acc_steps", type=int, default=1, help="Number of gradient accumulation steps (default: 1)")
-    parser.add_argument("--mixed_precision", action="store_true", default=False, help="Use Mixed Precision")
+    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
     parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
     parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
     parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")

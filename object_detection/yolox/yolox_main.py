@@ -46,10 +46,10 @@ IOU_THRESHOLD = 0.65
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
 DEPLOYMENT_DICT = {
-    'trt': DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
+    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
                                             graph_description=None,
                                             input_shapes_for_deployment=[(None, 3, None, None)]),
-    'tflite': DeploymentSettings_TFLite(graph_author="CLIKA",
+    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
                                         graph_description=None,
                                         input_shapes_for_deployment=[(None, 3, None, None)])
 }
@@ -102,6 +102,7 @@ class CRITERION_WRAPPER(object):
     Isolate loss calculation from `model.forward()`
     https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L194-L203
     """
+
     def __init__(self, head_module):
         self.head_module = head_module
 
@@ -169,6 +170,7 @@ class TRAIN_WRAPPER(MosaicDetection):
     Wrap original Dataset class to return tuple of length 2 instead of tuple of length 4
     https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/data/datasets/mosaicdetection.py#L154
     """
+
     def __init__(self, *attrs, **kwargs):
         super().__init__(*attrs, **kwargs)
 
@@ -227,6 +229,7 @@ class TEST_WRAPPER(COCODataset):
     Wrap original Dataset class to return tuple of length 2 instead of tuple of length 4
     https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/data/datasets/coco.py#L188
     """
+
     def __init__(self, *attrs, **kwargs):
         super().__init__(*attrs, **kwargs)
 
@@ -247,6 +250,7 @@ def get_eval_loader_(config):
     Get eval Dataset and return DataLoader
     https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/exp/yolox_base.py#L312
     """
+
     def collate_fn(batch):
         img, target = zip(*batch)  # transposed
         (target, img, img_info, img_id) = zip(*target)
@@ -286,6 +290,7 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
     A custom metric class that inherits from a torchmetrics object.
     We use this class to preform postprocessing to the model's outputs before calculating the MeanAveragePrecision
     """
+
     def __init__(self,
                  strides: tuple,
                  conf_thres: float,
@@ -314,7 +319,7 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         grids = []
         _strides = []
         for (hsize, wsize), stride in zip(heads_hw, self.strides):
-            yv, xv = torch.meshgrid(torch.arange(hsize), torch.arange(wsize), indexing='ij')
+            yv, xv = torch.meshgrid(torch.arange(hsize), torch.arange(wsize), indexing="ij")
             yv = yv.to(_device)
             xv = xv.to(_device)
             grid = torch.stack((xv, yv), 2).view(1, -1, 2)
@@ -391,6 +396,8 @@ def resume_compression(
         eval_losses: COMPDTYPE = None,
         eval_metrics: COMPDTYPE = None
 ):
+    engine = PyTorchCompressionEngine()
+
     mcs = ModelCompileSettings(
         optimizer=None,
         training_losses=train_losses,
@@ -398,8 +405,6 @@ def resume_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
-
     final = engine.resume(
         clika_state_path=config.ckpt,
         model_compile_settings=mcs,
@@ -430,9 +435,10 @@ def run_compression(
 ):
     global DEPLOYMENT_DICT
 
+    engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
-    settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
 
+    settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
     settings.global_quantization_settings.activations_num_bits = config.activations_num_bits
@@ -457,9 +463,7 @@ def run_compression(
     # Skip quantization for last layers
     layer_names_to_skip = {
         "conv_62", "conv_65", "conv_66",
-
         "conv_74", "conv_70", "conv_73",
-
         "conv_78", "conv_82", "conv_81",
     }
     for x in layer_names_to_skip:
@@ -472,17 +476,16 @@ def run_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
-
     final = engine.optimize(
         output_path=config.output_dir,
         settings=settings,
         model=model,
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
-        init_evaluation_dataset_fn=get_eval_loader
-    )
+        init_evaluation_dataset_fn=get_eval_loader,
+        is_training_from_scratch=config.train_from_scratch
 
+    )
     engine.deploy(
         clika_state_path=final,
         output_dir_path=config.output_dir,
@@ -500,7 +503,7 @@ def main(config):
 
     config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
     if os.path.exists(config.data) is False:
-        raise FileNotFoundError('Could not find default dataset please check `--data`')
+        raise FileNotFoundError("Could not find default dataset please check `--data`")
 
     config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
 
@@ -527,7 +530,7 @@ def main(config):
             warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
             resume_compression_flag = True
         else:
-            print(f'loading ckpt from {config.ckpt}')
+            print(f"loading ckpt from {config.ckpt}")
             ckpt = torch.load(config.ckpt, map_location=device)
             model.load_state_dict(ckpt["model"])
 
@@ -605,9 +608,9 @@ def main(config):
         )
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CLIKA YOLOX Example')
-    parser.add_argument('--target_framework', type=str, default='trt', choices=["tflite", "trt"], help='choose the targe frame work TensorFlow Lite or TensorRT')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CLIKA YOLOX Example")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default="COCO", help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -620,7 +623,7 @@ if __name__ == '__main__':
     parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
     parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
     parser.add_argument("--grads_acc_steps", type=int, default=4, help="Number of gradient accumulation steps (default: 4)")
-    parser.add_argument("--mixed_precision", action="store_true", default=False, help="Use Mixed Precision")
+    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
     parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
     parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
     parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")

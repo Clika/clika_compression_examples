@@ -32,17 +32,16 @@ from layers.modules import MultiBoxLoss
 from layers.functions.prior_box import PriorBox
 from utils.box_utils import decode
 
-CONF_THRESHOLD = 0.1
 IOU_THRESHOLD = 0.35
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
 DEPLOYMENT_DICT = {
-    'trt': DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
+    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
                                             graph_description=None,
                                             input_shapes_for_deployment=[(None, 3, None, None)]),
 
-    'tflite': DeploymentSettings_TFLite(graph_author="CLIKA",
+    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
                                         graph_description=None,
                                         input_shapes_for_deployment=[(None, 3, None, None)]),
 }
@@ -58,7 +57,7 @@ def load_checkpoints(config, model):
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
         head = k[:7]
-        if head == 'module.':
+        if head == "module.":
             name = k[7:]  # remove `module.`
         else:
             name = k
@@ -103,6 +102,7 @@ class CRITERION_WRAPPER(MultiBoxLoss):
     This way we can see the name of each loss during the logs of the training process
     https://github.com/biubug6/Pytorch_Retinaface/blob/b984b4b775b2c4dced95c1eadd195a5c7d32a60b/layers/modules/multibox_loss.py#L44
     """
+
     def __init__(self, *attrs, priors):
         self.priors = priors
         super().__init__(*attrs)
@@ -133,9 +133,9 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
     A custom metric class that inherits from a torchmetrics object.
     we use this class to preform postprocessing to the model's outputs before calculating the MeanAveragePrecision
     """
+
     def __init__(self,
                  priors: torch.Tensor,
-                 conf_thres: float,
                  iou_thres: float,
                  img_shape: tuple,
                  box_format: str = "xyxy",
@@ -153,7 +153,6 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         img_sizes = torch.cat((img_sizes, img_sizes), dim=-1)
         self.add_state("prior_data", default=priors, persistent=False)
         self.add_state("img_sizes", default=img_sizes, persistent=False)
-        self.conf_thres: float = conf_thres
         self.iou_thres: float = iou_thres
         self.img_shape = img_shape
 
@@ -161,7 +160,7 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         """post process the logit outputs in order to calculate MeanAveragePrecision"""
         BATCH_SIZE: int = batch_bbox_regressions.size()[0]
         batch_scores = torch.softmax(batch_classifications, -1)[..., 1][..., None]
-        batch_inds = batch_scores > self.conf_thres
+        batch_inds = batch_scores > 0  # if larger than 0 consider as an object
         filtered_batch_scores = [batch_scores[i][batch_inds[i]] for i in range(BATCH_SIZE)]
         detections: list = []
         for i in range(BATCH_SIZE):
@@ -204,7 +203,7 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
             if detections[i] is None:
                 continue
             pred_boxes, pred_score = torch.split(detections[i], (4, 1), -1)
-            pred_labels = (pred_score > self.conf_thres).long()
+            pred_labels = torch.ones(pred_boxes.shape[0]).to(pred_boxes.device)
             pred_boxes.clamp_(min=0)
 
             targets_boxes = targets[i] * torch.tensor(
@@ -230,6 +229,7 @@ class WiderFaceEvalDataset(WiderFaceDetection):
     Create custom one based on ...
     https://github.com/biubug6/Pytorch_Retinaface/blob/b984b4b775b2c4dced95c1eadd195a5c7d32a60b/data/wider_face.py#L9
     """
+
     def __init__(self, txt_path: str, size: int):
         super().__init__(txt_path, None)
         self.size = size
@@ -274,6 +274,8 @@ def resume_compression(
         eval_losses: COMPDTYPE = None,
         eval_metrics: COMPDTYPE = None
 ):
+    engine = PyTorchCompressionEngine()
+
     mcs = ModelCompileSettings(
         optimizer=None,
         training_losses=train_losses,
@@ -281,8 +283,6 @@ def resume_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
-
     final = engine.resume(
         clika_state_path=config.ckpt,
         model_compile_settings=mcs,
@@ -313,9 +313,10 @@ def run_compression(
 ):
     global DEPLOYMENT_DICT
 
+    engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
-    settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
 
+    settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
     settings.global_quantization_settings.activations_num_bits = config.activations_num_bits
@@ -338,14 +339,13 @@ def run_compression(
 
     # Skip quantization for last layers
     layer_names_to_skip = [
-        "conv_75", "conv_77", "conv_81", "conv_80", "conv_76", "conv_75", "conv_74", "conv_79", "conv_73",
-        "permute_5", "permute_4", "permute_3", "permute_8", "permute_7", "permute_6", "permute_2", "permute_1",
-        "permute",
+        "conv_78", "conv_77", "conv_81", "conv_80", "conv_76", "conv_75", "conv_74", "conv_79", "conv_73",
+        "permute_5", "permute_4", "permute_3", "permute_8", "permute_7", "permute_6", "permute_2", "permute_1", "permute",
         "shape_9", "shape_8", "shape_7", "shape_12", "shape_11", "shape_10", "shape_6", "shape_5", "shape_4",
-        "reshape_5", "reshape_4", "reshape_3", "reshape_8", "reshape_7", "reshape_6", "reshape_2", "reshape_1",
-        "reshape",
-        "concat_3", "concat_4", "concat_5"
+        "reshape_5", "reshape_4", "reshape_3", "reshape_8", "reshape_7", "reshape_6", "reshape_2", "reshape_1", "reshape",
+        "concat_4", "concat_5", "concat_3"
     ]
+
     for x in layer_names_to_skip:
         settings.set_quantization_settings_for_layer(x, LayerQuantizationSettings(skip_quantization=True))
 
@@ -378,7 +378,7 @@ def run_compression(
 
 
 def main(config):
-    global BASE_DIR, CONF_THRESHOLD, IOU_THRESHOLD
+    global BASE_DIR, IOU_THRESHOLD
 
     print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
 
@@ -386,7 +386,7 @@ def main(config):
 
     config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
     if os.path.exists(config.data) is False:
-        raise FileNotFoundError('Could not find default dataset please check `--data`')
+        raise FileNotFoundError("Could not find default dataset please check `--data`")
 
     config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
 
@@ -395,7 +395,7 @@ def main(config):
     ====================================================================================================================
     """
     cfg = cfg_re50  # cfg_mnet for mobilenet backbone
-    image_size = cfg['image_size']
+    image_size = cfg["image_size"]
     model = RetinaFace(cfg=cfg)
 
     if config.train_from_scratch is False:
@@ -405,7 +405,7 @@ def main(config):
             warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
             resume_compression_flag = True
         else:
-            print(f'loading ckpt from {config.ckpt}')
+            print(f"loading ckpt from {config.ckpt}")
             model = load_checkpoints(config, model)
 
     """
@@ -444,7 +444,6 @@ def main(config):
     train_metrics = None
     eval_metrics = MeanAveragePrecisionWrapper(_priors,
                                                img_shape=(image_size, image_size),
-                                               conf_thres=CONF_THRESHOLD,
                                                iou_thres=IOU_THRESHOLD)
     eval_metrics = {"mAP": eval_metrics}
 
@@ -476,9 +475,9 @@ def main(config):
         )
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CLIKA RetinaFace Example')
-    parser.add_argument('--target_framework', type=str, default='trt', choices=["tflite", "trt"], help='choose the targe frame work TensorFlow Lite or TensorRT')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CLIKA RetinaFace Example")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default="widerface", help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -491,7 +490,7 @@ if __name__ == '__main__':
     parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
     parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
     parser.add_argument("--grads_acc_steps", type=int, default=4, help="gradient accumulation steps")
-    parser.add_argument("--mixed_precision", action="store_true", default=False, help="Use Mixed Precision")
+    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
     parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
     parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
     parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")

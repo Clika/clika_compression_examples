@@ -46,11 +46,11 @@ IOU_THRESHOLD = 0.65
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
 DEPLOYMENT_DICT = {
-    'trt': DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
+    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
                                             graph_description=None,
                                             input_shapes_for_deployment=[(None, 3, None, None)]),
 
-    'tflite': DeploymentSettings_TFLite(graph_author="CLIKA",
+    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
                                         graph_description=None,
                                         input_shapes_for_deployment=[(None, 3, None, None)]),
 }
@@ -68,6 +68,7 @@ class YoloV7(Model):
     Override original model to hide augment, profile from the SDK
     https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/models/yolo.py#L581
     """
+
     def __init__(self, *attrs, **kwargs):
         super().__init__(*attrs, **kwargs)
 
@@ -110,73 +111,73 @@ def get_optimizer(model: nn.Module,
     """
     pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
     for k, v in model.named_modules():
-        if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
+        if hasattr(v, "bias") and isinstance(v.bias, nn.Parameter):
             pg2.append(v.bias)  # biases
         if isinstance(v, nn.BatchNorm2d):
             pg0.append(v.weight)  # no decay
-        elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
+        elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
             pg1.append(v.weight)  # apply decay
-        if hasattr(v, 'im'):
-            if hasattr(v.im, 'implicit'):
+        if hasattr(v, "im"):
+            if hasattr(v.im, "implicit"):
                 pg0.append(v.im.implicit)
             else:
                 for iv in v.im:
                     pg0.append(iv.implicit)
-        if hasattr(v, 'imc'):
-            if hasattr(v.imc, 'implicit'):
+        if hasattr(v, "imc"):
+            if hasattr(v.imc, "implicit"):
                 pg0.append(v.imc.implicit)
             else:
                 for iv in v.imc:
                     pg0.append(iv.implicit)
-        if hasattr(v, 'imb'):
-            if hasattr(v.imb, 'implicit'):
+        if hasattr(v, "imb"):
+            if hasattr(v.imb, "implicit"):
                 pg0.append(v.imb.implicit)
             else:
                 for iv in v.imb:
                     pg0.append(iv.implicit)
-        if hasattr(v, 'imo'):
-            if hasattr(v.imo, 'implicit'):
+        if hasattr(v, "imo"):
+            if hasattr(v.imo, "implicit"):
                 pg0.append(v.imo.implicit)
             else:
                 for iv in v.imo:
                     pg0.append(iv.implicit)
-        if hasattr(v, 'ia'):
-            if hasattr(v.ia, 'implicit'):
+        if hasattr(v, "ia"):
+            if hasattr(v.ia, "implicit"):
                 pg0.append(v.ia.implicit)
             else:
                 for iv in v.ia:
                     pg0.append(iv.implicit)
-        if hasattr(v, 'attn'):
-            if hasattr(v.attn, 'logit_scale'):
+        if hasattr(v, "attn"):
+            if hasattr(v.attn, "logit_scale"):
                 pg0.append(v.attn.logit_scale)
-            if hasattr(v.attn, 'q_bias'):
+            if hasattr(v.attn, "q_bias"):
                 pg0.append(v.attn.q_bias)
-            if hasattr(v.attn, 'v_bias'):
+            if hasattr(v.attn, "v_bias"):
                 pg0.append(v.attn.v_bias)
-            if hasattr(v.attn, 'relative_position_bias_table'):
+            if hasattr(v.attn, "relative_position_bias_table"):
                 pg0.append(v.attn.relative_position_bias_table)
-        if hasattr(v, 'rbr_dense'):
-            if hasattr(v.rbr_dense, 'weight_rbr_origin'):
+        if hasattr(v, "rbr_dense"):
+            if hasattr(v.rbr_dense, "weight_rbr_origin"):
                 pg0.append(v.rbr_dense.weight_rbr_origin)
-            if hasattr(v.rbr_dense, 'weight_rbr_avg_conv'):
+            if hasattr(v.rbr_dense, "weight_rbr_avg_conv"):
                 pg0.append(v.rbr_dense.weight_rbr_avg_conv)
-            if hasattr(v.rbr_dense, 'weight_rbr_pfir_conv'):
+            if hasattr(v.rbr_dense, "weight_rbr_pfir_conv"):
                 pg0.append(v.rbr_dense.weight_rbr_pfir_conv)
-            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_idconv1'):
+            if hasattr(v.rbr_dense, "weight_rbr_1x1_kxk_idconv1"):
                 pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_idconv1)
-            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_conv2'):
+            if hasattr(v.rbr_dense, "weight_rbr_1x1_kxk_conv2"):
                 pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_conv2)
-            if hasattr(v.rbr_dense, 'weight_rbr_gconv_dw'):
+            if hasattr(v.rbr_dense, "weight_rbr_gconv_dw"):
                 pg0.append(v.rbr_dense.weight_rbr_gconv_dw)
-            if hasattr(v.rbr_dense, 'weight_rbr_gconv_pw'):
+            if hasattr(v.rbr_dense, "weight_rbr_gconv_pw"):
                 pg0.append(v.rbr_dense.weight_rbr_gconv_pw)
-            if hasattr(v.rbr_dense, 'vector'):
+            if hasattr(v.rbr_dense, "vector"):
                 pg0.append(v.rbr_dense.vector)
 
     optimizer = torch.optim.SGD(pg0, lr=lr, momentum=momentum, nesterov=True)
 
-    optimizer.add_param_group({'params': pg1, 'weight_decay': weight_decay})  # add pg1 with weight_decay
-    optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
+    optimizer.add_param_group({"params": pg1, "weight_decay": weight_decay})  # add pg1 with weight_decay
+    optimizer.add_param_group({"params": pg2})  # add pg2 (biases)
     del pg0, pg1, pg2
 
     return optimizer
@@ -188,6 +189,7 @@ class DATASET_WRAPPER(LoadImagesAndLabels):
     Wrap original Dataset class to return tuple of length 2 instead of tuple of length 4
     https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/utils/datasets.py#L662
     """
+
     def __init__(self, *attrs, **kwargs):
         self.train = kwargs.pop("train")
         super().__init__(*attrs, **kwargs)
@@ -196,7 +198,7 @@ class DATASET_WRAPPER(LoadImagesAndLabels):
         imgs, targets, _, shapes = super().__getitem__(item)
         imgs = imgs.to(torch.float32) / 255
 
-        if self.train:
+        if self.train is True:
             return imgs, targets
         else:
             return imgs, (targets, shapes)
@@ -219,7 +221,7 @@ def _collate_fn(batch):
 
 
 def get_loader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-               workers=8, image_weights=False, prefix='', train=True) -> torch.utils.data.DataLoader:
+               workers=8, image_weights=False, prefix="", train=True) -> torch.utils.data.DataLoader:
     """
     Return train/eval Dataloader
     https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/utils/datasets.py#L65
@@ -259,6 +261,7 @@ class CRITERION_WRAPPER(object):
     inside `ComputeLossOTA` `imgs` argument is only used one time to return height of an image
     https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/utils/loss.py#L662
     """
+
     def __init__(self, model, config):
         self.fake_obj = [np.zeros([3, IMG_SIZE]) for _ in range(config.batch_size)]
         self.loss_fn = ComputeLossOTA(model, False)
@@ -273,6 +276,7 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
     A custom metric class that inherits from a torchmetrics object.
     We use this class to preform postprocessing to the model's outputs before calculating the MeanAveragePrecision
     """
+
     def __init__(self,
                  anchors: Tensor,
                  strides: Tensor,
@@ -359,6 +363,8 @@ def resume_compression(
         eval_losses: COMPDTYPE = None,
         eval_metrics: COMPDTYPE = None
 ):
+    engine = PyTorchCompressionEngine()
+
     mcs = ModelCompileSettings(
         optimizer=None,
         training_losses=train_losses,
@@ -366,8 +372,6 @@ def resume_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
-
     final = engine.resume(
         clika_state_path=config.ckpt,
         model_compile_settings=mcs,
@@ -398,9 +402,10 @@ def run_compression(
 ):
     global DEPLOYMENT_DICT
 
+    engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
-    settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
 
+    settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
     settings.global_quantization_settings.activations_num_bits = config.activations_num_bits
@@ -423,9 +428,9 @@ def run_compression(
 
     # Skip quantization for last layers
     layer_names_to_skip = {
-        "reshape", "permute", "conv_92",
-        "reshape_1", "permute_1", "conv_93",
-        "reshape_2", "permute_2", "conv_94",
+        "reshape", "permute", "conv_92", "shape",
+        "reshape_1", "permute_1", "conv_93", "shape_1",
+        "reshape_2", "permute_2", "conv_94", "shape_2",
     }
     for x in layer_names_to_skip:
         settings.set_quantization_settings_for_layer(x, LayerQuantizationSettings(skip_quantization=True))
@@ -437,17 +442,16 @@ def run_compression(
         evaluation_losses=eval_losses,
         evaluation_metrics=eval_metrics,
     )
-    engine = PyTorchCompressionEngine()
-
     final = engine.optimize(
         output_path=config.output_dir,
         settings=settings,
         model=model,
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
-        init_evaluation_dataset_fn=get_eval_loader
-    )
+        init_evaluation_dataset_fn=get_eval_loader,
+        is_training_from_scratch=config.train_from_scratch
 
+    )
     engine.deploy(
         clika_state_path=final,
         output_dir_path=config.output_dir,
@@ -465,7 +469,7 @@ def main(config):
 
     config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
     if os.path.exists(config.data) is False:
-        raise FileNotFoundError('Could not find default dataset please check `--data`')
+        raise FileNotFoundError("Could not find default dataset please check `--data`")
 
     config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
 
@@ -476,8 +480,8 @@ def main(config):
     # data_dict from "data/coco.yaml"
     with open(DATA_YAML) as f:
         data_dict = yaml.load(f, Loader=yaml.SafeLoader)
-    _names = data_dict['names']  # class names (e.g) 80 cls
-    _num_classes = int(data_dict['nc'])
+    _names = data_dict["names"]  # class names (e.g) 80 cls
+    _num_classes = int(data_dict["nc"])
 
     # hyp from "data/hyp.scratch.p5.yaml"
     with open(HYP_YAML) as f:
@@ -499,10 +503,10 @@ def main(config):
             resume_compression_flag = True
         else:
             resume_compression_flag = False
-            print(f'loading ckpt from {config.ckpt}')
+            print(f"loading ckpt from {config.ckpt}")
             ckpt = torch.load(config.ckpt, map_location="cuda")  # load checkpoint
-            model = YoloV7(ckpt['model'].yaml, ch=3, nc=_num_classes, anchors=None).cuda()
-            state_dict = ckpt['model'].float().state_dict()  # to FP32
+            model = YoloV7(ckpt["model"].yaml, ch=3, nc=_num_classes, anchors=None).cuda()
+            state_dict = ckpt["model"].float().state_dict()  # to FP32
             model.load_state_dict(state_dict, strict=True)
 
     replace_DETECT(model=model)
@@ -514,15 +518,15 @@ def main(config):
     """
     _nominal_batch_size = 64
     accumulate = max(round(_nominal_batch_size / config.batch_size), 1)
-    hyp['weight_decay'] *= config.batch_size * accumulate / _nominal_batch_size  # scale weight_decay according to batch_size
+    hyp["weight_decay"] *= config.batch_size * accumulate / _nominal_batch_size  # scale weight_decay according to batch_size
     optimizer = get_optimizer(model, config.lr, momentum=hyp["momentum"], weight_decay=hyp["weight_decay"])
 
     """
     Define Dataloaders
     ====================================================================================================================
     """
-    train_path = str(Path(config.data).joinpath("train2017.txt"))  # data_dict['train']
-    test_path = str(Path(config.data).joinpath("val2017.txt"))  # data_dict['val']
+    train_path = str(Path(config.data).joinpath("train2017.txt"))  # data_dict["train"]
+    test_path = str(Path(config.data).joinpath("val2017.txt"))  # data_dict["val"]
     _grid_size = max(int(model.stride.max()), 32)  # grid size = max stride
     _detection_heads = model.model[-1].nl  # number of detection_heads
 
@@ -538,7 +542,7 @@ def main(config):
                                rect=False,
                                workers=config.workers,
                                image_weights=False,
-                               prefix=colorstr('train: '),
+                               prefix=colorstr("train: "),
                                train=True)
     get_eval_loader = partial(get_loader,
                               path=test_path,
@@ -551,17 +555,17 @@ def main(config):
                               rect=True,
                               workers=config.workers,
                               pad=0.5,
-                              prefix=colorstr('val: '),
+                              prefix=colorstr("val: "),
                               train=False)
 
     """
     ETC
     ====================================================================================================================
     """
-    hyp['box'] *= 3. / _detection_heads  # scale to layers
-    hyp['cls'] *= _num_classes / 80. * 3. / _detection_heads  # scale to classes and layers
-    hyp['obj'] *= (IMG_SIZE / 640) ** 2 * 3. / _detection_heads  # scale to image size and layers
-    hyp['label_smoothing'] = 0
+    hyp["box"] *= 3. / _detection_heads  # scale to layers
+    hyp["cls"] *= _num_classes / 80. * 3. / _detection_heads  # scale to classes and layers
+    hyp["obj"] *= (IMG_SIZE / 640) ** 2 * 3. / _detection_heads  # scale to image size and layers
+    hyp["label_smoothing"] = 0
     model.nc = _num_classes  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -616,9 +620,9 @@ def main(config):
         )
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CLIKA YOLOv7 Example')
-    parser.add_argument('--target_framework', type=str, default='trt', choices=["tflite", "trt"], help='choose the targe frame work TensorFlow Lite or TensorRT')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CLIKA YOLOv7 Example")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default="coco", help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -631,7 +635,7 @@ if __name__ == '__main__':
     parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
     parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
     parser.add_argument("--grads_acc_steps", type=int, default=4, help="gradient accumulation steps")
-    parser.add_argument("--mixed_precision", action="store_true", default=False, help="Use Mixed Precision")
+    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
     parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
     parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
     parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")

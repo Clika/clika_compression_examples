@@ -8,7 +8,8 @@ model and dataset  operation to the optimizer in order to conform with the Retin
 
 # Requirements
 
-- Install CLIKA SDK (https://docs.clika.io/docs/installation)
+- Python >= 3.8
+- CLIKA SDK (https://docs.clika.io/docs/installation)
 - Clone RetinaFace project & Install dependencies
 
 ```

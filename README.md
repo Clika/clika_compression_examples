@@ -68,7 +68,7 @@ all examples has the same command line argument which are:
 - **reset_train_data** - Reset training dataset between epochs
 - **reset_eval_data** - Reset evaluation dataset between epochs
 - **grads_acc_steps** - (useful for larger model that must run with a smaller batch size)
-- **mixed_precision** - Use mixed precision when compression the model with FP16 for the weights, FP32 for the gradients. Activations can be either
+- **no_mixed_precision** - turn off mixed precision when compressing the model, mixed precision uses FP16 for the weights, FP32 for the gradients. Activations can be either (all examples are using mixed precision by default)
 - **lr_warmup_epochs** - Number of epochs of the Learning Rate warmup stage
 - **lr_warmup_steps_per_epoch** - Number of steps each epoch of the Learning Rate warmup stage
 - **fp16_weights** - Use FP16 weights when compressing  (can reduce VRAM usage)
@@ -89,3 +89,30 @@ all examples has the same command line argument which are:
 - **weights_num_bits** - How many bits to use for the Weights for Quantization
 - **activations_num_bits** - How many bits to use for the Activation for Quantization
 
+## Docker Image
+
+We provide a simple [`.Dockerfile`](.Dockerfile) to set up an environment with PyTorch and `CLIKA Compression`.
+It is based on the official [PyTorch `.Dockerfile`](https://hub.docker.com/layers/pytorch/pytorch/2.0.1-cuda11.7-cudnn8-devel/images/sha256-4f66166dd757752a6a6a9284686b4078e92337cd9d12d2e14d2d46274dfa9048?context=explore)
+
+### Usage
+
+Requirements:
+
+- [Docker](https://www.docker.com/) > 19.03
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/overview.html) (`clika-compression` requires CUDA)
+
+To build the Docker Image
+
+```commandline
+# pwd: clika_compression_examples/
+export CC_LICENSE_KEY=<your-license-key> 
+docker build --build-arg CC_LICENSE_KEY=$CC_LICENSE_KEY --tag "clika_compression:latest" -f .Dockerfile .
+```
+
+To run a container and the [MNIST](image_classification%2Fmnist) example:
+
+```commandline
+docker run -it --shm-size 8G --gpus all  --entrypoint /bin/bash -v .:/workspace:rw clika_compression
+pip install -r image_classification/mnist/requirements.txt 
+python image_classification/mnist/mnist_main.py
+```

@@ -6,7 +6,9 @@ and to add weight decay in order to conform with the state-of-the-art training p
 
 
 # Requirements
-- Install CLIKA SDK (https://docs.clika.io/docs/installation)
+
+- Python >= 3.8
+- CLIKA SDK (https://docs.clika.io/docs/installation)
 - `pip install -r image_classification/resnet/requirements.txt`
 - Download dependencies from pytorch/vision
     ```commandline

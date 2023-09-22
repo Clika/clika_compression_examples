@@ -16,7 +16,7 @@ from torchvision.models import resnet18, resnet50, ResNet18_Weights, ResNet50_We
 import torchmetrics
 
 from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    LayerSettings, DeploymentSettings_TFLite
+    DeploymentSettings_TFLite
 from clika_compression.settings import (
     generate_default_settings, LayerQuantizationSettings, ModelCompileSettings
 )

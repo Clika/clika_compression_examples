@@ -244,6 +244,7 @@ def run_compression(
         eval_metrics: COMPDTYPE = None
 ):
     global DEPLOYMENT_DICT
+
     engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
 

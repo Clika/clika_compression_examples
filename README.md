@@ -91,7 +91,7 @@ all examples has the same command line argument which are:
 
 ## Docker Image
 
-We provide a simple [`.Dockerfile`](.Dockerfile) to set up an environment with PyTorch and `CLIKA Compression`.
+We provide a simple [`clika_examples.Dockerfile`](..%2Fclika_examples.Dockerfile) to set up an environment with PyTorch and `CLIKA Compression`.
 It is based on the official [PyTorch `.Dockerfile`](https://hub.docker.com/layers/pytorch/pytorch/2.0.1-cuda11.7-cudnn8-devel/images/sha256-4f66166dd757752a6a6a9284686b4078e92337cd9d12d2e14d2d46274dfa9048?context=explore)
 
 ### Usage
@@ -106,7 +106,7 @@ To build the Docker Image
 ```commandline
 # pwd: clika_compression_examples/
 export CC_LICENSE_KEY=<your-license-key> 
-docker build --build-arg CC_LICENSE_KEY=$CC_LICENSE_KEY --tag "clika_compression:latest" -f .Dockerfile .
+docker build --build-arg CC_LICENSE_KEY=$CC_LICENSE_KEY --tag "clika_compression:latest" -f clika_examples.Dockerfile .
 ```
 
 To run a container and the [MNIST](image_classification%2Fmnist) example:

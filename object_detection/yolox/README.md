@@ -4,7 +4,7 @@
 
 # Requirements
 
-- Python == 3.8, 3.9, 3.10
+- Python >= 3.8
 - CLIKA SDK (https://docs.clika.io/docs/installation)
 - Clone YOLOX project & Install dependencies
 

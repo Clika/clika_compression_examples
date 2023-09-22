@@ -1,4 +1,4 @@
-# U2_net Compressing Example
+# U-2-Net Compressing Example
 <ins>CLIKA SDK</ins> example to compress `U2-Net` model on `DUTS` dataset
 
 
@@ -8,12 +8,12 @@
 - CLIKA SDK (https://docs.clika.io/docs/installation)
 - Clone U2Net project & Install dependencies
 ```
-# pwd: saliency_detection/u2_net
+# pwd: saliency_detection/u2net
 git clone https://github.com/xuebinqin/U-2-Net.git
-cd "U-2-Net"
+cd "u2net"
 git reset --hard 53dc9da026650663fc8d8043f3681de76e91cfde
 cd ..
-pip install -r "U-2-Net"/requirements.txt
+pip install -r "u2net"/requirements.txt
 
 # download checkpoint
 https://drive.google.com/file/d/1ao1ovG1Qtx4b7EoskHXmi2E9rp5CHLcZ/view
@@ -23,7 +23,7 @@ https://drive.google.com/file/d/1ao1ovG1Qtx4b7EoskHXmi2E9rp5CHLcZ/view
 Run the following script
 
 ```
-# pwd: saliency_detection/u2_net
+# pwd: saliency_detection/u2net
 sh prepare_duts_dataset.sh
 ```
 
@@ -44,8 +44,8 @@ You can also download DUTS dataset from [official website](http://saliencydetect
 # Run Examples
 
 ```
-# pwd: saliency_detection/u2_net
-python3 u2_net_main.py
+# pwd: saliency_detection/u2net
+python3 u2net_main.py
 ```
 
 

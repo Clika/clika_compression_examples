@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_DIR=$(dirname -- "$0")
+SCRIPT_DIR=${1:-$(dirname -- "$0")}
 
 
 python3 ${SCRIPT_DIR}/example_utils/download_gdrive.py 1vgCABX1JI3NGBzsHxwBXlmRjaLV3NIsG "retinaface_gt_v1.1.zip"

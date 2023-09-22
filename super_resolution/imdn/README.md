@@ -4,7 +4,7 @@
 
 # Requirements
 
-- Python == 3.8
+- Python >= 3.8
 - CLIKA SDK (https://docs.clika.io/docs/installation)
 - Clone IMDN project & Install dependencies
 ```
@@ -13,8 +13,16 @@ git clone https://github.com/Zheng222/IMDN.git
 cd IMDN
 git reset --hard 8f158e6a5ac9db6e5857d9159fd4a6c4214da574
 cd ..
+# we need these commands since scikit image api has changed for newer versions
+sed -i -e 's/from skimage.measure import compare_psnr as psnr/from skimage.metrics import peak_signal_noise_ratio as psnr/g' \
+super_resolution/imdn/IMDN/utils.py
+
+sed -i -e 's/from skimage.measure import compare_ssim as ssim/from skimage.metrics import structural_similarity as ssim /g' \
+super_resolution/imdn/IMDN/utils.py
+
 pip install -r requirements.txt
 ```
+
 
 # Prepare Dataset
 

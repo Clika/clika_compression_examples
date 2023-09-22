@@ -551,12 +551,14 @@ def main(config):
     ====================================================================================================================
     """
     optimizer = exp.get_optimizer(config.batch_size)
-    for group in optimizer.param_groups:
-        group["lr"] = config.lr
-
     if _optimizer_state_dict:  # if ckpt provided
         warnings.warn("using optimizer state dict from checkpoint (`--lr` cmd argument is ignored)")
         optimizer.load_state_dict(ckpt["optimizer"])
+    # override the lr with the value that was set by the user
+    optimizer.defaults["lr"] = config.lr
+    for group in optimizer.param_groups:
+        group["lr"] = config.lr
+
 
     """
     Define Dataloaders
@@ -632,7 +634,7 @@ if __name__ == "__main__":
     # Model Training Setting
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train the model (default: 100)")
     parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training and evaluation (default: 2)")
-    parser.add_argument("--lr", type=float, default=0.00125, help="Learning rate for the optimizer (default: 0.00125)")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
     parser.add_argument("--workers", type=int, default=3, help="Number of worker processes for data loading (default: 3)")
     parser.add_argument("--ckpt", type=str, default="yolox_s.pth", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")

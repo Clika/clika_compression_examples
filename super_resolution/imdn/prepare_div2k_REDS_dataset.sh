@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPT_DIR=$(dirname -- "$0")
+SCRIPT_DIR=${1:-$(dirname -- "$0")}
 mkdir -p ${SCRIPT_DIR}/dataset
 mkdir -p ${SCRIPT_DIR}/dataset/div2k
 mkdir -p ${SCRIPT_DIR}/dataset/div2k/DIV2K_decoded

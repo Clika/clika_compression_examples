@@ -336,7 +336,7 @@ if __name__ == "__main__":
     # Model Training Setting
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train the model (default: 100)")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and evaluation (default: 8)")
-    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate for the optimizer (default: 2e-4)")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
     parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
     parser.add_argument("--ckpt", type=str, default="IMDN/checkpoints/IMDN_x4.pth", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")

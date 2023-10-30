@@ -10,10 +10,10 @@
 ```
 # pwd: saliency_detection/u2net
 git clone https://github.com/xuebinqin/U-2-Net.git
-cd "u2net"
+cd U-2-Net
 git reset --hard 53dc9da026650663fc8d8043f3681de76e91cfde
 cd ..
-pip install -r "u2net"/requirements.txt
+pip install -r requirements.txt
 
 # download checkpoint
 https://drive.google.com/file/d/1ao1ovG1Qtx4b7EoskHXmi2E9rp5CHLcZ/view

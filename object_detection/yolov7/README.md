@@ -1,12 +1,13 @@
 # YOLOv7 Compressing Example
-<ins>CLIKA SDK</ins> example to compress `Yolov7` model on `COCO` dataset
 
+<ins>CLIKA SDK</ins> example to compress `Yolov7` model on `COCO` dataset
 
 # Requirements
 
 - Python >= 3.8
 - CLIKA SDK (https://docs.clika.io/docs/installation)
 - Clone YOLOv7 project & Install dependencies
+
 ```
 # pwd: object_detection/yolov7
 git clone https://github.com/WongKinYiu/yolov7.git
@@ -16,7 +17,7 @@ cd ..
 
 # install requirements
 pip install -r yolov7/requirements.txt
-pip install torchmetrics
+pip install torchmetrics[detection]==1.0.1
 
 # download checkpoint
 wget https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7.pt
@@ -49,7 +50,6 @@ OR
 
 You may download COCO dataset from [official website](https://cocodataset.org/#download) and unzip.
 
-
 # Run Examples
 
 ```
@@ -57,6 +57,6 @@ You may download COCO dataset from [official website](https://cocodataset.org/#d
 python3 yolov7_main.py
 ```
 
-
 # References
+
 https://github.com/WongKinYiu/yolov7

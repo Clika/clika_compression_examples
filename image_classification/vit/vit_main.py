@@ -462,7 +462,7 @@ if __name__ == "__main__":
     parser.add_argument("--gradients_checkpoint", action="store_true", default=False, help="Use gradient checkpointing")
 
     # Model Training Setting
-    parser.add_argument("--epochs", type=int, default=200, help="Number of epochs to train the model (default: 10)")
+    parser.add_argument("--epochs", type=int, default=200, help="Number of epochs to train the model (default: 200)")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and evaluation (default: 8)")
     parser.add_argument("--eval_batch_size", type=int, default=64, help="Batch size for evaluation (default: 64)")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")

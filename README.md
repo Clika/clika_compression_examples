@@ -45,6 +45,7 @@ clika_compression_examples/
 | [ResNet](image_classification%2Fresnet)                | [image_classification](image_classification) | ImageNet / ImageNette | CV     |
 | [Visual Transformer (ViT)](image_classification%2Fvit) | [image_classification](image_classification) | ImageNet / ImageNette | CV     |
 | [RetinaFace](object_detection%2Fretinaface)            | [object_detection](object_detection)         | WIDER FACE            | CV     |
+| [RetinaNet](object_detection%2Fretinanet)              | [object_detection](object_detection)         | COCO                  | CV     |
 | [YoloV7](object_detection%2Fyolov7)                    | [object_detection](object_detection)         | COCO                  | CV     |
 | [YOLOX](object_detection%2Fyolox)                      | [object_detection](object_detection)         | COCO                  | CV     |
 | [U2-Net](saliency_detection%2Fu2net)                   | [saliency_detection](saliency_detection)     | DUTS                  | CV     |
@@ -112,7 +113,9 @@ docker build --build-arg CC_LICENSE_KEY=$CC_LICENSE_KEY --tag "clika_compression
 To run a container and the [MNIST](image_classification%2Fmnist) example:
 
 ```commandline
-docker run -it --shm-size 8G --gpus all  --entrypoint /bin/bash -v .:/workspace:rw clika_compression
+docker run -it --shm-size 8G --gpus all  --entrypoint /bin/bash -v $PWD:/workspace:rw clika_compression
+# folow the instructions on the specific `README.`md file for the example
+# for MNIST simply install `requirements.txt` and run example  
 pip install -r image_classification/mnist/requirements.txt 
 python image_classification/mnist/mnist_main.py
 ```

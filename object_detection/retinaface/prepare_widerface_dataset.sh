@@ -2,8 +2,7 @@
 
 SCRIPT_DIR=${1:-$(dirname -- "$0")}
 
-
-python3 ${SCRIPT_DIR}/example_utils/download_gdrive.py 1vgCABX1JI3NGBzsHxwBXlmRjaLV3NIsG "retinaface_gt_v1.1.zip"
+python3 ${SCRIPT_DIR}/example_utils/download_gdrive.py 1vgCABX1JI3NGBzsHxwBXlmRjaLV3NIsG "${SCRIPT_DIR}/retinaface_gt_v1.1.zip"
 wget https://huggingface.co/datasets/wider_face/resolve/main/data/WIDER_train.zip -P ${SCRIPT_DIR}
 wget https://huggingface.co/datasets/wider_face/resolve/main/data/WIDER_val.zip -P ${SCRIPT_DIR}
 wget https://huggingface.co/datasets/wider_face/resolve/main/data/WIDER_test.zip -P ${SCRIPT_DIR}

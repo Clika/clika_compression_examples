@@ -1,40 +1,38 @@
-import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
-import sys
-from typing import Optional, List, Any, Dict, Callable, Union
-import types
 import argparse
-from functools import partial
+import os
+import sys
 import warnings
+from functools import partial
 from pathlib import Path
-import yaml
+from typing import Optional, List, Any, Dict, Callable, Union
 
 import numpy as np
 import torch
-from torch import Tensor
 import torch.nn as nn
+import yaml
+from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
+    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
+from clika_compression.settings import (
+    generate_default_settings, ModelCompileSettings
+)
+from torch import Tensor
 from torchmetrics.detection import MeanAveragePrecision
 
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite
-from clika_compression.settings import (
-    generate_default_settings, LayerQuantizationSettings, ModelCompileSettings
-)
-
 BASE_DIR = Path(__file__).parent
-sys.path.append(str(BASE_DIR / "yolov7"))
+sys.path.insert(0, str(BASE_DIR / "yolov7"))
 from models.yolo import Model, Detect
 from utils.datasets import LoadImagesAndLabels, InfiniteDataLoader
 from utils.loss import ComputeLossOTA
 from utils.general import colorstr, labels_to_class_weights, non_max_suppression, xywhn2xyxy
 
+# https://github.com/WongKinYiu/yolov7/blob/a207844b1ce82d204ab36d87d496728d3d2348e7/cfg/deploy/yolov7.yaml#L6
 ANCHORS = torch.tensor([
     [12, 16, 19, 36, 40, 28],
     [36, 75, 76, 55, 72, 146],
     [142, 110, 192, 243, 459, 401]
 ], dtype=torch.float32)
+
+# YoloV7(str(BASE_DIR.joinpath("yolov7", "cfg", "deploy", "yolov7.yaml")), ch=3, nc=_num_classes, anchors=None).strides
 STRIDES = torch.tensor([8, 16, 32], dtype=torch.float32)
 
 DATA_YAML = str(BASE_DIR.joinpath("yolov7", "data", "coco.yaml"))
@@ -45,14 +43,13 @@ IOU_THRESHOLD = 0.65
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
+deployment_kwargs = {'graph_author': "CLIKA",
+                     "graph_description": None,
+                     "input_shapes_for_deployment": [(None, 3, None, None)]}
 DEPLOYMENT_DICT = {
-    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
-                                            graph_description=None,
-                                            input_shapes_for_deployment=[(None, 3, None, None)]),
-
-    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
-                                        graph_description=None,
-                                        input_shapes_for_deployment=[(None, 3, None, None)]),
+    "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
+    "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
 }
 
 
@@ -76,29 +73,22 @@ class YoloV7(Model):
         return super().forward(x, False, False)
 
 
-def _detect_forward_WRAPPER(self, x):
-    """
-    Detect is the last component of YoloV7 graph
-    Since we are focusing on the fine-tunable graph ignore `self.end2end`, `self.include_nms` and `self.concat`
-    Assume `self.training = True`
-    https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/models/yolo.py#L42
-    """
-    for i in range(self.nl):
-        x[i] = self.m[i](x[i])  # conv
-        bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
-        x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
-    return x
+class DetectWrapper(Detect):
+    def __init__(self):
+        pass
 
-
-def replace_DETECT(model):
-    """
-    Loop through the model components and replace `Detect` module's forward method
-    """
-    for n, m in model.named_children():
-        if isinstance(m, Detect):
-            m.forward = types.MethodType(_detect_forward_WRAPPER, m)
-        else:
-            replace_DETECT(m)
+    def forward(self, x):
+        """
+        Detect is the last component of YoloV7 graph
+        Since we are focusing on the fine-tunable graph ignore `self.end2end`, `self.include_nms` and `self.concat`
+        Assume `self.training = True`
+        https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/models/yolo.py#L42
+        """
+        for i in range(self.nl):
+            x[i] = self.m[i](x[i])  # conv
+            bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+        return x
 
 
 def get_optimizer(model: nn.Module,
@@ -377,7 +367,8 @@ def resume_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        settings=None
+        settings=None,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -426,21 +417,12 @@ def run_compression(
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
 
-    # Skip quantization for last layers
-    layer_names_to_skip = {
-        "reshape", "permute", "conv_92", "shape",
-        "reshape_1", "permute_1", "conv_93", "shape_1",
-        "reshape_2", "permute_2", "conv_94", "shape_2",
-    }
-    for x in layer_names_to_skip:
-        settings.set_quantization_settings_for_layer(x, LayerQuantizationSettings(skip_quantization=True))
-
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics,
+        evaluation_metrics=eval_metrics
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -449,8 +431,8 @@ def run_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        is_training_from_scratch=config.train_from_scratch
-
+        is_training_from_scratch=config.train_from_scratch,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -509,7 +491,10 @@ def main(config):
             state_dict = ckpt["model"].float().state_dict()  # to FP32
             model.load_state_dict(state_dict, strict=True)
 
-    replace_DETECT(model=model)
+    _old_detect = model.model[-1]
+    _new_detect = DetectWrapper()
+    _new_detect.__dict__ = _old_detect.__dict__
+    model.model[-1] = _new_detect
     print("Detect module replaced")
 
     """
@@ -593,7 +578,7 @@ def main(config):
     eval_metrics = {"mAP": eval_metrics}
 
     """
-    RUN COE
+    RUN Compression
     ====================================================================================================================    
     """
     if resume_compression_flag is True:
@@ -622,7 +607,7 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CLIKA YOLOv7 Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default="coco", help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -649,6 +634,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default="yolov7.pt", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
     parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
+    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
 
     # Quantization Config
     parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")

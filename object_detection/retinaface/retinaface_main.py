@@ -1,32 +1,27 @@
-import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
-import sys
-from typing import Optional, List, Any, Dict, Callable, Union
 import argparse
+import os
+import sys
+import warnings
 from functools import partial
 from pathlib import Path
-import warnings
+from typing import Optional, List, Any, Dict, Callable, Union
 
-import numpy as np
 import cv2
+import numpy as np
 import torch
+import torchvision
+from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
+    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
+from clika_compression.settings import (
+    generate_default_settings, ModelCompileSettings
+)
 from torch import Tensor
 from torch.utils.data import DataLoader
-import torchvision
 from torchmetrics.detection import MeanAveragePrecision
 
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite
-from clika_compression.settings import (
-    generate_default_settings, LayerQuantizationSettings, ModelCompileSettings
-)
-
 BASE_DIR = Path(__file__).parent
-sys.path.append(str(BASE_DIR / "Pytorch_Retinaface"))
+sys.path.insert(0, str(BASE_DIR / "Pytorch_Retinaface"))
 from models.retinaface import RetinaFace
-from models import net
 from data import WiderFaceDetection, detection_collate, preproc, cfg_re50
 from layers.modules import MultiBoxLoss
 from layers.functions.prior_box import PriorBox
@@ -36,14 +31,14 @@ IOU_THRESHOLD = 0.35
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
-DEPLOYMENT_DICT = {
-    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
-                                            graph_description=None,
-                                            input_shapes_for_deployment=[(None, 3, None, None)]),
+deployment_kwargs = {'graph_author': "CLIKA",
+                     "graph_description": None,
+                     "input_shapes_for_deployment": [(None, 3, None, None)]}
 
-    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
-                                        graph_description=None,
-                                        input_shapes_for_deployment=[(None, 3, None, None)]),
+DEPLOYMENT_DICT = {
+    "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
+    "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
 }
 
 
@@ -68,32 +63,6 @@ def load_checkpoints(config, model):
 
 # Define Class/Function Wrappers
 # ==================================================================================================================== #
-def FPN_forward_replacement(self, x):
-    """
-    CLIKA Compression SDK currently does not support 'size' method on tensors
-    replace `size` with 'shape' by overwrite the original forward funtion of the model
-    https://github.com/biubug6/Pytorch_Retinaface/blob/b984b4b775b2c4dced95c1eadd195a5c7d32a60b/models/net.py#L81C8-L81C8
-    """
-
-    x = list(x.values())
-
-    output1 = self.output1(x[0])
-    output2 = self.output2(x[1])
-    output3 = self.output3(x[2])
-
-    up3 = torch.nn.functional.interpolate(output3, size=[output2.shape[2], output2.shape[3]], mode="nearest")
-    output2 = output2 + up3
-    output2 = self.merge2(output2)
-
-    up2 = torch.nn.functional.interpolate(output2, size=[output1.shape[2], output1.shape[3]], mode="nearest")
-    output1 = output1 + up2
-    output1 = self.merge1(output1)
-
-    out = [output1, output2, output3]
-    return out
-
-
-net.FPN.forward = FPN_forward_replacement
 
 
 class CRITERION_WRAPPER(MultiBoxLoss):
@@ -160,7 +129,7 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         """post process the logit outputs in order to calculate MeanAveragePrecision"""
         BATCH_SIZE: int = batch_bbox_regressions.size()[0]
         batch_scores = torch.softmax(batch_classifications, -1)[..., 1][..., None]
-        batch_inds = batch_scores > 0  # if larger than 0 consider as an object
+        batch_inds = batch_scores >= 0.05  # if larger than 0.05 consider as an object
         filtered_batch_scores = [batch_scores[i][batch_inds[i]] for i in range(BATCH_SIZE)]
         detections: list = []
         for i in range(BATCH_SIZE):
@@ -288,7 +257,8 @@ def resume_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        settings=None
+        settings=None,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -337,35 +307,23 @@ def run_compression(
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
 
-    # Skip quantization for last layers
-    layer_names_to_skip = [
-        "conv_78", "conv_77", "conv_81", "conv_80", "conv_76", "conv_75", "conv_74", "conv_79", "conv_73",
-        "permute_5", "permute_4", "permute_3", "permute_8", "permute_7", "permute_6", "permute_2", "permute_1", "permute",
-        "shape_9", "shape_8", "shape_7", "shape_12", "shape_11", "shape_10", "shape_6", "shape_5", "shape_4",
-        "reshape_5", "reshape_4", "reshape_3", "reshape_8", "reshape_7", "reshape_6", "reshape_2", "reshape_1", "reshape",
-        "concat_4", "concat_5", "concat_3"
-    ]
-
-    for x in layer_names_to_skip:
-        settings.set_quantization_settings_for_layer(x, LayerQuantizationSettings(skip_quantization=True))
-
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics,
+        evaluation_metrics=eval_metrics
     )
-
     final = engine.optimize(
         output_path=config.output_dir,
         settings=settings,
         model=model,
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
-        init_evaluation_dataset_fn=get_eval_loader
+        init_evaluation_dataset_fn=get_eval_loader,
+        is_training_from_scratch=config.train_from_scratch,
+        multi_gpu=config.multi_gpu
     )
-
     engine.deploy(
         clika_state_path=final,
         output_dir_path=config.output_dir,
@@ -447,7 +405,7 @@ def main(config):
     eval_metrics = {"mAP": eval_metrics}
 
     """
-    RUN COE
+    RUN Compression
     ====================================================================================================================    
     """
     if resume_compression_flag is True:
@@ -476,7 +434,7 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CLIKA RetinaFace Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default="widerface", help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -503,6 +461,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default="Resnet50_Final.pth", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
     parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
+    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
 
     # Quantization Config
     parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")

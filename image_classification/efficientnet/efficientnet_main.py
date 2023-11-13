@@ -1,30 +1,25 @@
-import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
-import sys
-from typing import Union, Dict, Callable
 import argparse
-from functools import partial
+import os
+import sys
 import warnings
-from pathlib import Path
 from collections import namedtuple
+from functools import partial
+from pathlib import Path
+from typing import Union, Dict, Callable
 
 import torch
+import torchmetrics
+import torchvision
+from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
+    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
+from clika_compression.settings import (
+    generate_default_settings, ModelCompileSettings
+)
 from torch.optim import SGD
 from torch.utils.data.dataloader import default_collate
-import torchvision
-from torchvision.ops import StochasticDepth
-import torchmetrics
-
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite, LayerSettings
-from clika_compression.settings import (
-    generate_default_settings, LayerQuantizationSettings, ModelCompileSettings
-)
 
 BASE_DIR = Path(__file__).parent
-sys.path.append(str(BASE_DIR / "vision"))
+sys.path.insert(0, str(BASE_DIR / "vision"))
 from train import load_data
 import transforms
 import utils
@@ -37,26 +32,18 @@ MODEL_NAME, TRAIN_CROP_SIZE, VAL_CROP_SIZE, VAL_RESIZE_SIZE, WEIGHT_NAME = MODEL
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
+deployment_kwargs = {'graph_author': "CLIKA",
+                     "graph_description": None,
+                     "input_shapes_for_deployment": [(None, 3, None, None)]}
 DEPLOYMENT_DICT = {
-    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
-                                            graph_description=None,
-                                            input_shapes_for_deployment=[(None, 3, None, None)]),
-
-    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
-                                        graph_description=None,
-                                        input_shapes_for_deployment=[(None, 1, None, None)]),
-
+    "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
+    "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
 }
 
 
 # Define Class/Function Wrappers
 # ==================================================================================================================== #
-def replace_StochasticDepth(model):
-    for n, m in model.named_children():
-        if isinstance(m, StochasticDepth):
-            setattr(model, n, torch.nn.Identity())
-        else:
-            replace_StochasticDepth(m)  # recur
 
 
 def batch_accuracy(outputs, targets, topk=(1,)):
@@ -168,7 +155,8 @@ def resume_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        settings=None
+        settings=None,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -218,15 +206,12 @@ def run_compression(
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
 
-    # Skip quantization for last layers
-    settings.set_quantization_settings_for_layer("linear", LayerQuantizationSettings(skip_quantization=True))
-
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics,
+        evaluation_metrics=eval_metrics
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -235,7 +220,8 @@ def run_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        is_training_from_scratch=config.train_from_scratch
+        is_training_from_scratch=config.train_from_scratch,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -289,8 +275,6 @@ def main(config):
             print(f"loading ckpt from {config.ckpt}")
             state_dict = torch.load(config.ckpt)
             model.load_state_dict(state_dict["model"])
-
-    replace_StochasticDepth(model)
 
     """
     Define Loss Function
@@ -357,7 +341,7 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CLIKA EfficientNet Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default=None, help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -384,6 +368,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default=None, help="Path to load the model checkpoints (e.g. .pth, .pompom)")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
     parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
+    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
 
     # Quantization Config
     parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")

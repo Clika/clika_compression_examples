@@ -1,30 +1,25 @@
-import os
-import types
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
-import sys
-from typing import Union, Dict, Callable
 import argparse
-from functools import partial
+import os
+import sys
 import warnings
-from pathlib import Path
 from collections import namedtuple
+from functools import partial
+from pathlib import Path
+from typing import Union, Dict, Callable
 
 import torch
+import torchmetrics
+import torchvision
+from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
+    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
+from clika_compression.settings import (
+    generate_default_settings, ModelCompileSettings
+)
 from torch.optim import SGD, AdamW
 from torch.utils.data.dataloader import default_collate
-import torchvision
-import torchmetrics
-
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite, LayerSettings
-from clika_compression.settings import (
-    generate_default_settings, LayerQuantizationSettings, ModelCompileSettings
-)
 
 BASE_DIR = Path(__file__).parent
-sys.path.append(str(BASE_DIR / "vision"))
+sys.path.insert(0, str(BASE_DIR / "vision"))
 from train import load_data
 import transforms
 import utils
@@ -44,7 +39,7 @@ MODEL_DICT = {
         "weight_decay": None,
         "norm_weight_decay": None,
         "optimizer": "adamw",
-        "skip_quantization_layers": ["linear_24"]
+        "clip_grad_norm": 1,
     },
     "l_16": {
         "torchvision_model_name": "vit_l_16",
@@ -58,7 +53,7 @@ MODEL_DICT = {
         "weight_decay": None,
         "norm_weight_decay": None,
         "optimizer": "sgd",
-        "skip_quantization_layers": ["linear_48"]
+        "clip_grad_norm": 1,
     },
     "l_32": {
         "torchvision_model_name": "vit_l_32",
@@ -72,19 +67,20 @@ MODEL_DICT = {
         "weight_decay": None,
         "norm_weight_decay": None,
         "optimizer": "adamw",
-        "skip_quantization_layers": ["linear_48"]
+        "clip_grad_norm": 1,
     },
 }
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
+deployment_kwargs = {'graph_author': "CLIKA",
+                     "graph_description": None,
+                     "input_shapes_for_deployment": [(None, 3, 224, 224)]}
+
 DEPLOYMENT_DICT = {
-    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
-                                            graph_description=None,
-                                            input_shapes_for_deployment=[(None, 3, 224, 224)]),
-    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
-                                        graph_description=None,
-                                        input_shapes_for_deployment=[(None, 3, 224, 224)]),
+    "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
+    "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
 }
 
 
@@ -109,34 +105,6 @@ def batch_accuracy(outputs, targets, topk=(1,)):
         return res[0]
 
 
-def alternative_process_inputs(self, x):
-    """
-    current version of CLIKA model tracing feature does not support shape division
-    Use -1 to avoid shape division when tracing the model
-
-    https://github.com/pytorch/vision/blob/2030d208ba1044b97b8ceab91852858672a56cc8/torchvision/models/vision_transformer.py#L268
-    """
-    n, c, h, w = x.shape
-    # p = self.patch_size
-    torch._assert(h == self.image_size, f"Wrong image height! Expected {self.image_size} but got {h}!")
-    torch._assert(w == self.image_size, f"Wrong image width! Expected {self.image_size} but got {w}!")
-    # n_h = h // p
-    # n_w = w // p
-
-    # (n, c, h, w) -> (n, hidden_dim, n_h, n_w)
-    x = self.conv_proj(x)
-    # (n, hidden_dim, n_h, n_w) -> (n, hidden_dim, (n_h * n_w))
-    x = x.reshape(n, self.hidden_dim, -1)
-
-    # (n, hidden_dim, (n_h * n_w)) -> (n, (n_h * n_w), hidden_dim)
-    # The self attention layer expects inputs in the format (N, S, E)
-    # where S is the source sequence length, N is the batch size, E is the
-    # embedding dimension
-    x = x.permute(0, 2, 1)
-
-    return x
-
-
 class MultiClassAccuracy(torchmetrics.classification.accuracy.MulticlassAccuracy):
 
     def update(self, preds: torch.Tensor, target: torch.Tensor) -> None:
@@ -145,6 +113,10 @@ class MultiClassAccuracy(torchmetrics.classification.accuracy.MulticlassAccuracy
     def compute(self) -> torch.Tensor:
         results = super().compute()
         return results * 100.0
+
+
+def our_collate_fn(batch, mixupcutmix):
+    return mixupcutmix(*default_collate(batch))
 
 
 def get_loader(config, model_info: dict, train=True):
@@ -182,9 +154,7 @@ def get_loader(config, model_info: dict, train=True):
         mixup_transforms = [transforms.RandomMixup(NUM_CLASSES, p=1.0, alpha=0.2),
                             transforms.RandomCutmix(NUM_CLASSES, p=1.0, alpha=1.0)]
         mixupcutmix = torchvision.transforms.RandomChoice(mixup_transforms)
-
-        def collate_fn(batch):
-            return mixupcutmix(*default_collate(batch))
+        collate_fn = partial(our_collate_fn, mixupcutmix=mixupcutmix)
     else:
         _, dataset, _, sampler = load_data(train_dir, val_dir, opt)
     if train:
@@ -214,7 +184,6 @@ def resume_compression(
         eval_losses: COMPDTYPE = None,
         eval_metrics: COMPDTYPE = None
 ):
-
     engine = PyTorchCompressionEngine()
 
     mcs = ModelCompileSettings(
@@ -229,7 +198,8 @@ def resume_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        settings=None
+        settings=None,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -279,21 +249,16 @@ def run_compression(
     settings.training_settings.lr_warmup_steps_per_epoch = config.lr_warmup_steps_per_epoch
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
+    settings.training_settings.clip_grad_norm = model_info["clip_grad_norm"]
     settings.training_settings.skip_initial_evaluation = False
-
-    layer_settings = LayerSettings(
-        quantization_settings=LayerQuantizationSettings(skip_quantization=True)
-    )
-    # Skip quantization for last layers
-    layer_names_to_skip = model_info["skip_quantization_layers"]
-    settings.layer_settings = {name: layer_settings for name in layer_names_to_skip}
+    settings.training_settings.clip_grad_norm_type = 2.0
 
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics,
+        evaluation_metrics=eval_metrics
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -302,7 +267,8 @@ def run_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        is_training_from_scratch=config.train_from_scratch
+        is_training_from_scratch=config.train_from_scratch,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -315,7 +281,7 @@ def run_compression(
 
 
 def main(config):
-    global BASE_DIR, NUM_CLASSES, MODEL_DICT
+    global BASE_DIR, NUM_CLASSES, MODEL_DICT, CHOSEN_MODEL_SIZE
     model_info: dict = MODEL_DICT[CHOSEN_MODEL_SIZE]
     print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
 
@@ -349,7 +315,7 @@ def main(config):
         model = torchvision.models.get_model(model_info["torchvision_model_name"],
                                              weights=model_info["torchvision_weights_name"],
                                              num_classes=NUM_CLASSES)
-    model._process_input = types.MethodType(alternative_process_inputs, model)
+
     if (config.train_from_scratch is False) and (config.ckpt is not None):
         config.ckpt = config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
 
@@ -394,7 +360,6 @@ def main(config):
     """
     get_train_loader = partial(get_loader, config=config, model_info=model_info, train=True)
     get_eval_loader = partial(get_loader, config=config, model_info=model_info, train=False)
-    next(iter(get_train_loader()))
 
     """
     Define Metric Wrapper
@@ -428,8 +393,8 @@ def main(config):
     else:
         run_compression(
             config=config,
-            model_info=model_info,
             model=model,
+            model_info=model_info,
             optimizer=optimizer,
             get_train_loader=get_train_loader,
             get_eval_loader=get_eval_loader,
@@ -442,11 +407,11 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CLIKA EfficientNet Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default=None, help="Dataset directory")
 
     # CLIKA Engine Training Settings
-    parser.add_argument("--steps_per_epoch", type=int, default=None, help="Number of steps per epoch")
+    parser.add_argument("--steps_per_epoch", type=int, default=1000, help="Number of steps per epoch")
     parser.add_argument("--evaluation_steps", type=int, default=None, help="Number of steps for evaluation")
     parser.add_argument("--stats_steps", type=int, default=100, help="Number of steps for scans")
     parser.add_argument("--print_interval", type=int, default=50, help="COE print log interval")
@@ -465,11 +430,12 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=200, help="Number of epochs to train the model (default: 200)")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and evaluation (default: 8)")
     parser.add_argument("--eval_batch_size", type=int, default=64, help="Batch size for evaluation (default: 64)")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
+    parser.add_argument("--lr", type=float, default=1e-6, help="Learning rate for the optimizer (default: 1e-6)")
     parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
     parser.add_argument("--ckpt", type=str, default=None, help="Path to load the model checkpoints (e.g. .pth, .pompom)")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
     parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
+    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
 
     # Quantization Config
     parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")

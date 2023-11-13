@@ -48,7 +48,6 @@ clika_compression_examples/
 | [RetinaNet](object_detection%2Fretinanet)              | [object_detection](object_detection)         | COCO                  | CV     |
 | [YoloV7](object_detection%2Fyolov7)                    | [object_detection](object_detection)         | COCO                  | CV     |
 | [YOLOX](object_detection%2Fyolox)                      | [object_detection](object_detection)         | COCO                  | CV     |
-| [U2-Net](saliency_detection%2Fu2net)                   | [saliency_detection](saliency_detection)     | DUTS                  | CV     |
 | [IMDN](super_resolution%2Fimdn)                        | [super_resolution](super_resolution)         | DIV2K and REDS4       | CV     |
 
 # Run Examples

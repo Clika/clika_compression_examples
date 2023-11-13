@@ -1,99 +1,77 @@
-import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
-import sys
-from typing import Optional, List, Any, Dict, Callable, Union
-import types
 import argparse
-from functools import partial
+import os
+import sys
 import warnings
+from functools import partial
 from pathlib import Path
+from typing import Optional, List, Any, Dict, Callable, Union
 
 import numpy as np
 import torch
+from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
+    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
+from clika_compression.settings import (
+    generate_default_settings, ModelCompileSettings
+)
 from torch.utils.data import Dataset
 from torchmetrics.detection import MeanAveragePrecision
 
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite
-from clika_compression.settings import (
-    generate_default_settings, LayerQuantizationSettings, ModelCompileSettings
-)
-
 BASE_DIR = Path(__file__).parent
-sys.path.append(str(BASE_DIR / "YOLOX"))
+sys.path.insert(0, str(BASE_DIR / "YOLOX"))
 from yolox.exp.build import get_exp_by_name
 from yolox.models import YOLOXHead
 from yolox.data import (
     COCODataset,
-    TrainTransform,
-    ValTransform,
-    YoloBatchSampler,
-    DataLoader,
-    InfiniteSampler,
-    MosaicDetection,
-    worker_init_reset_seed,
 )
+from yolox.data.data_augment import preproc
 from yolox.utils import postprocess
 
 VAL_ANN = "instances_val2017.json"
 MODEL_NAME = "yolox-s"
 IMG_SIZE = (640, 640)
-CONF_THRESHOLD = 0.1
 IOU_THRESHOLD = 0.65
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
+deployment_kwargs = {'graph_author': "CLIKA",
+                     "graph_description": None,
+                     "input_shapes_for_deployment": [(None, 3, None, None)]}
 DEPLOYMENT_DICT = {
-    "trt": DeploymentSettings_TensorRT_ONNX(graph_author="CLIKA",
-                                            graph_description=None,
-                                            input_shapes_for_deployment=[(None, 3, None, None)]),
-    "tflite": DeploymentSettings_TFLite(graph_author="CLIKA",
-                                        graph_description=None,
-                                        input_shapes_for_deployment=[(None, 3, None, None)])
+    "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
+    "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
 }
 
 
 # Define Class/Function Wrappers
 # ==================================================================================================================== #
-def _head_forward_WRAPPER(self, x):
-    head_outputs = []
 
-    # https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L149-L161
-    for k, (cls_conv, reg_conv, _x) in enumerate(
-            zip(self.cls_convs, self.reg_convs, x)
-    ):
-        _x = self.stems[k](_x)
-        cls_x = _x
-        reg_x = _x
+class HeadtWrapper(YOLOXHead):
+    def __init__(self):
+        pass
 
-        cls_feat = cls_conv(cls_x)
-        cls_output = self.cls_preds[k](cls_feat)
+    def forward(self, x):
+        head_outputs = []
 
-        reg_feat = reg_conv(reg_x)
-        reg_output = self.reg_preds[k](reg_feat)
-        obj_output = self.obj_preds[k](reg_feat)
+        # https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L149-L161
+        for k, (cls_conv, reg_conv, _x) in enumerate(
+                zip(self.cls_convs, self.reg_convs, x)
+        ):
+            _x = self.stems[k](_x)
+            cls_x = _x
+            reg_x = _x
 
-        # https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L187-L191
-        head_outputs.extend([reg_output, obj_output, cls_output])
+            cls_feat = cls_conv(cls_x)
+            cls_output = self.cls_preds[k](cls_feat)
 
-    return head_outputs
+            reg_feat = reg_conv(reg_x)
+            reg_output = self.reg_preds[k](reg_feat)
+            obj_output = self.obj_preds[k](reg_feat)
 
+            # https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L187-L191
+            head_outputs.extend([reg_output, obj_output, cls_output])
 
-def replace_HEAD(model):
-    """
-    YOLOX.forward() take 3 arguments (xin, labels, imgs)
-    labels, imgs are only provided when loss need to be calculated (self.training=True)
-
-    We should not include loss calculation inside the traced graph
-    Replace forward call with `_head_forward_WRAPPER`
-    """
-    for n, m in model.named_children():
-        if isinstance(m, YOLOXHead):
-            m.forward = types.MethodType(_head_forward_WRAPPER, m)
-        else:
-            replace_HEAD(m)  # recur
+        return head_outputs
 
 
 class CRITERION_WRAPPER(object):
@@ -114,13 +92,13 @@ class CRITERION_WRAPPER(object):
         origin_preds = []
 
         p = [p[i * 3:i * 3 + 3] for i in range(3)]
-
         targets = targets.to(p[0][0].device)
 
         for k, (cls_conv, reg_conv, stride_this_level, _p) in enumerate(
                 zip(self.head_module.cls_convs, self.head_module.reg_convs, self.head_module.strides, p)
         ):
             # concat (bbox[4], conf[1], cls[1])
+            # https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L164
             reg_output, obj_output, cls_output = _p
             output = torch.cat([reg_output, obj_output, cls_output], 1)
             output, grid = self.head_module.get_output_and_grid(
@@ -159,24 +137,16 @@ class CRITERION_WRAPPER(object):
         )
 
         loss_dict = {
-            "total_loss": loss,
+            "iou_loss": iou_loss, "conf_loss": conf_loss, "cls_loss": cls_loss, "l1_loss": l1_loss
         }
         return loss_dict
 
 
-class TRAIN_WRAPPER(MosaicDetection):
-    """
-    Due to CLIKA SDK restriction, Every DataLoader should return tuple of length 2
-    Wrap original Dataset class to return tuple of length 2 instead of tuple of length 4
-    https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/data/datasets/mosaicdetection.py#L154
-    """
-
-    def __init__(self, *attrs, **kwargs):
-        super().__init__(*attrs, **kwargs)
-
-    def __getitem__(self, item):
-        inputs, targets, _, _ = super().__getitem__(item)  # img always input_size
-        return inputs, targets
+def collate_fn_train(batch):
+    inputs, targets, _img_infos, img_ids = zip(*batch)  # transposed
+    inputs = torch.from_numpy(np.stack(inputs, 0))
+    target = torch.from_numpy(np.stack(targets, 0))
+    return inputs, target
 
 
 def get_train_loader_(exp, config):
@@ -184,103 +154,51 @@ def get_train_loader_(exp, config):
     Get train Dataset from `exp` object and return DataLoader
     https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/exp/yolox_base.py#L155
     """
-    dataset = exp.get_dataset(cache=False)
-    dataset = TRAIN_WRAPPER(
-        dataset=dataset,
-        mosaic=True,
-        img_size=exp.input_size,
-        preproc=TrainTransform(
-            max_labels=120,
-            flip_prob=exp.flip_prob,
-            hsv_prob=exp.hsv_prob),
-        degrees=exp.degrees,
-        translate=exp.translate,
-        mosaic_scale=exp.mosaic_scale,
-        mixup_scale=exp.mixup_scale,
-        shear=exp.shear,
-        enable_mixup=exp.enable_mixup,
-        mosaic_prob=exp.mosaic_prob,
-        mixup_prob=exp.mixup_prob,
-    )
-
-    sampler = InfiniteSampler(len(dataset))
-
-    batch_sampler = YoloBatchSampler(
-        sampler=sampler,
+    loader = exp.get_data_loader(
         batch_size=config.batch_size,
-        drop_last=True,
-        mosaic=True,
+        is_distributed=False,
+        no_aug=True,  # turn off mosaic
+        cache_img=None,
     )
-
-    dataloader_kwargs = {
-        "num_workers": config.workers,
-        "pin_memory": True,
-        "batch_sampler": batch_sampler,
-        "worker_init_fn": worker_init_reset_seed
-    }
-    loader = DataLoader(dataset, **dataloader_kwargs)
-
+    exp.dataset = None
+    loader.collate_fn = collate_fn_train
     return loader
 
 
-class TEST_WRAPPER(COCODataset):
-    """
-    Due to CLIKA SDK restriction, Every DataLoader should return tuple of length 2
-    Wrap original Dataset class to return tuple of length 2 instead of tuple of length 4
-    https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/data/datasets/coco.py#L188
-    """
-
-    def __init__(self, *attrs, **kwargs):
-        super().__init__(*attrs, **kwargs)
-
-    def __getitem__(self, item):
-        img, target_before, img_info, img_id = self.pull_item(item)
-        target_before = torch.from_numpy(target_before)
-        target = target_before
-        if self.preproc is not None:
-            img, target = self.preproc(img, target, self.input_dim)
-        # img = img * 1 / 255.0
-        target = torch.cat((torch.zeros((target_before.shape[0], 1)), target_before), 1)
-        return img, (target, img, img_info, img_id)
+def collate_fn_eval(batch):
+    inputs, targets, _img_infos, img_ids = zip(*batch)  # transposed
+    inputs = torch.from_numpy(np.stack(inputs, 0))
+    target = list(map(torch.from_numpy, targets))
+    img_shapes = [tuple(_img.shape[1:3]) for _img in inputs]
+    return inputs, (target, img_shapes, _img_infos, img_ids)
 
 
-#
+def _val_preproc(img, target, input_dim):
+    img, r = preproc(img, input_dim)
+    return img, target * r
+
+
 def get_eval_loader_(config):
     """
     Get eval Dataset and return DataLoader
     https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/exp/yolox_base.py#L312
     """
-
-    def collate_fn(batch):
-        img, target = zip(*batch)  # transposed
-        (target, img, img_info, img_id) = zip(*target)
-        for i, l in enumerate(target):
-            l[:, 0] = i  # add target image index for build_targets()
-        imgs = torch.from_numpy(np.stack(img, 0))
-        target = torch.cat(target, 0)
-        img_shapes = tuple([
-            tuple(imgs[i].size()) for i in range(len(imgs))
-        ])
-        return imgs, (target, img_shapes, img_info, img_id)
-
-    valdataset = TEST_WRAPPER(
+    dataset = COCODataset(
         data_dir=config.data,
-        json_file=VAL_ANN,
+        json_file="instances_val2017.json",
         name="val2017",
-        img_size=IMG_SIZE,
-        preproc=ValTransform(legacy=False),
+        img_size=(640, 640),  # DEFAULT
+        preproc=_val_preproc,
     )
-
-    sampler = torch.utils.data.SequentialSampler(valdataset)
-
+    sampler = torch.utils.data.SequentialSampler(dataset)
     dataloader_kwargs = {
+        "batch_size": config.batch_size,
         "num_workers": config.workers,
         "pin_memory": True,
         "sampler": sampler,
-        "batch_size": config.batch_size,
-        "collate_fn": collate_fn
+        "collate_fn": collate_fn_eval
     }
-    loader = torch.utils.data.DataLoader(valdataset, **dataloader_kwargs)
+    loader = torch.utils.data.DataLoader(dataset, **dataloader_kwargs)
 
     return loader
 
@@ -293,7 +211,6 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
 
     def __init__(self,
                  strides: tuple,
-                 conf_thres: float,
                  iou_thres: float,
                  box_format: str = "xyxy",
                  iou_type: str = "bbox",
@@ -304,7 +221,6 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
                  **kwargs: Any):
         super().__init__(box_format, iou_type, iou_thresholds, rec_thresholds, max_detection_thresholds, class_metrics,
                          **kwargs)
-        self.conf_thres = conf_thres
         self.iou_thres = iou_thres
         self.strides = strides
         self.num_classes = 80
@@ -341,8 +257,9 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         Re-do the rest of calculation (e.g. sigmoid, concat)
         """
         labels, img_shapes, img_info, img_id = targets
-        labels = labels.to(outputs[0].device)
+        labels = [l.to(outputs[0].device) for l in labels]
 
+        # postprocessing  TODO: include in nn.Module graph
         outputs = [outputs[i * 3:i * 3 + 3] for i in range(3)]
         multi_H_outputs = []
         for o in outputs:
@@ -351,7 +268,6 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
                 [reg_output, obj_output.sigmoid(), cls_output.sigmoid()], 1
             )
             multi_H_outputs.append(_single_H_output)
-
         outputs_hw = [x.shape[-2:] for x in multi_H_outputs]
         merged_outputs = torch.cat(
             [x.flatten(start_dim=2) for x in multi_H_outputs], dim=2
@@ -360,13 +276,12 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         merged_outputs = self._decode_outputs(merged_outputs, outputs_hw)
 
         # convert output from cxcywh -> xyxy format
-        detections = postprocess(merged_outputs, num_classes=self.num_classes, conf_thre=self.conf_thres, nms_thre=self.iou_thres, class_agnostic=False)
+        detections = postprocess(merged_outputs, num_classes=self.num_classes, conf_thre=0.05, nms_thre=self.iou_thres, class_agnostic=False)
 
-        for i, d in enumerate(detections):
-            if d is None:
+        for p, t in zip(detections, labels):
+            if p is None:
                 continue
-            box, obj_conf, class_conf, class_label = d.split([4, 1, 1, 1], 1)
-            _ts = labels[labels[:, 0] == i][:, 1:]
+            box, obj_conf, class_conf, class_label = p.split([4, 1, 1, 1], 1)
             super().update(
                 [{
                     "labels": class_label.ravel().long(),
@@ -374,8 +289,8 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
                     "boxes": box,  # xyxy
                 }],
                 [{
-                    "labels": _ts[:, -1].ravel().to(torch.int32).long(),
-                    "boxes": _ts[:, :4]
+                    "labels": t[:, -1].ravel().long(),
+                    "boxes": t[:, :4]
                 }])
 
     def compute(self) -> dict:
@@ -410,7 +325,8 @@ def resume_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        settings=None
+        settings=None,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -460,21 +376,12 @@ def run_compression(
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
 
-    # Skip quantization for last layers
-    layer_names_to_skip = {
-        "conv_62", "conv_65", "conv_66",
-        "conv_74", "conv_70", "conv_73",
-        "conv_78", "conv_82", "conv_81",
-    }
-    for x in layer_names_to_skip:
-        settings.set_quantization_settings_for_layer(x, LayerQuantizationSettings(skip_quantization=True))
-
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics,
+        evaluation_metrics=eval_metrics
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -483,8 +390,8 @@ def run_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-        is_training_from_scratch=config.train_from_scratch
-
+        is_training_from_scratch=config.train_from_scratch,
+        multi_gpu=config.multi_gpu
     )
     engine.deploy(
         clika_state_path=final,
@@ -497,7 +404,7 @@ def run_compression(
 
 
 def main(config):
-    global BASE_DIR, VAL_ANN, MODEL_NAME, IMG_SIZE, CONF_THRESHOLD, IOU_THRESHOLD
+    global BASE_DIR, VAL_ANN, MODEL_NAME, IMG_SIZE, IOU_THRESHOLD
 
     print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
 
@@ -519,7 +426,10 @@ def main(config):
     model = exp.get_model()
     model.to(device).float()
 
-    replace_HEAD(model)
+    _old_head = model.head
+    _new_head = HeadtWrapper()
+    _new_head.__dict__ = _old_head.__dict__
+    model.head = _new_head
 
     resume_compression_flag = False
     _optimizer_state_dict = None
@@ -543,7 +453,7 @@ def main(config):
     model.head.use_l1 = True  # add additional L1 loss
 
     train_losses = CRITERION_WRAPPER(head_module=model.head)
-    train_losses = {"loss_sum": train_losses}
+    train_losses = {"total": train_losses}
     eval_losses = None
 
     """
@@ -559,12 +469,22 @@ def main(config):
     for group in optimizer.param_groups:
         group["lr"] = config.lr
 
-
     """
     Define Dataloaders
     ====================================================================================================================
     """
     exp.data_dir = config.data
+    exp.shear = 0
+    exp.degrees = 0
+    exp.hsv_prob = 0
+    exp.translate = 0
+    exp.flip_prob = 0
+    exp.mixup_prob = 0
+    exp.mosaic_prob = 0
+    exp.enable_mixup = False
+    exp.multiscale_range = 0
+    exp.input_size = IMG_SIZE
+    exp.data_num_workers = config.workers
 
     get_train_loader = partial(get_train_loader_, exp=exp, config=config)
     get_eval_loader = partial(get_eval_loader_, config=config)
@@ -575,7 +495,6 @@ def main(config):
     """
     eval_metrics = MeanAveragePrecisionWrapper(
         strides=(8, 16, 32),
-        conf_thres=CONF_THRESHOLD,
         iou_thres=IOU_THRESHOLD)
     eval_metrics = {"mAP": eval_metrics}
     train_metrics = None
@@ -612,7 +531,7 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CLIKA YOLOX Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
+    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
     parser.add_argument("--data", type=str, default="COCO", help="Dataset directory")
 
     # CLIKA Engine Training Settings
@@ -633,12 +552,13 @@ if __name__ == "__main__":
 
     # Model Training Setting
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train the model (default: 100)")
-    parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training and evaluation (default: 2)")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and evaluation (default: 8)")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
-    parser.add_argument("--workers", type=int, default=3, help="Number of worker processes for data loading (default: 3)")
+    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
     parser.add_argument("--ckpt", type=str, default="yolox_s.pth", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
     parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
+    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
 
     # Quantization Config
     parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")

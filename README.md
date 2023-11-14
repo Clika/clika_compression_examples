@@ -83,6 +83,8 @@ all examples has the same command line argument which are:
 - **ckpt** - Path to load the model checkpoints (e.g. .pth or .pompom)
 - **output_dir** - Output directory for saving checkpoints (`.pompom` files), logs, model architecture and deployed models
 - **train_from_scratch** - Ignoring `--ckpt` (if given) and training the model from scratch
+- **multi_gpu** - Use Multi-GPU Distributed Compression, similar to [PyTorch's DistributedDataParallel](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html)
+  paradigm, which copies the model to each GPU and splits the dataset between them.
 
 ### Quantization Config
 

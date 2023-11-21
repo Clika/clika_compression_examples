@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 import sys
 import warnings
 from functools import partial
@@ -8,13 +9,16 @@ from typing import Optional, List, Any, Dict, Callable, Union
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 import yaml
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
-from clika_compression.settings import (
-    generate_default_settings, ModelCompileSettings
+from clika_compression import (
+    PyTorchCompressionEngine,
+    QATQuantizationSettings,
+    DeploymentSettings_TensorRT_ONNX,
+    DeploymentSettings_TFLite,
+    DeploymentSettings_ONNXRuntime_ONNX,
 )
+from clika_compression.settings import generate_default_settings, ModelCompileSettings
 from torch import Tensor
 from torchmetrics.detection import MeanAveragePrecision
 
@@ -23,14 +27,29 @@ sys.path.insert(0, str(BASE_DIR / "yolov7"))
 from models.yolo import Model, Detect
 from utils.datasets import LoadImagesAndLabels, InfiniteDataLoader
 from utils.loss import ComputeLossOTA
-from utils.general import colorstr, labels_to_class_weights, non_max_suppression, xywhn2xyxy
+from utils.general import (
+    colorstr,
+    labels_to_class_weights,
+    non_max_suppression,
+    xywhn2xyxy,
+)
+
+RANDOM_SEED = 0
+torch.manual_seed(RANDOM_SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(RANDOM_SEED)
+random.seed(RANDOM_SEED)
 
 # https://github.com/WongKinYiu/yolov7/blob/a207844b1ce82d204ab36d87d496728d3d2348e7/cfg/deploy/yolov7.yaml#L6
-ANCHORS = torch.tensor([
-    [12, 16, 19, 36, 40, 28],
-    [36, 75, 76, 55, 72, 146],
-    [142, 110, 192, 243, 459, 401]
-], dtype=torch.float32)
+ANCHORS = torch.tensor(
+    [
+        [12, 16, 19, 36, 40, 28],
+        [36, 75, 76, 55, 72, 146],
+        [142, 110, 192, 243, 459, 401],
+    ],
+    dtype=torch.float32,
+)
 
 # YoloV7(str(BASE_DIR.joinpath("yolov7", "cfg", "deploy", "yolov7.yaml")), ch=3, nc=_num_classes, anchors=None).strides
 STRIDES = torch.tensor([8, 16, 32], dtype=torch.float32)
@@ -43,13 +62,15 @@ IOU_THRESHOLD = 0.65
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
-deployment_kwargs = {'graph_author': "CLIKA",
-                     "graph_description": None,
-                     "input_shapes_for_deployment": [(None, 3, None, None)]}
+deployment_kwargs = {
+    "graph_author": "CLIKA",
+    "graph_description": None,
+    "input_shapes_for_deployment": [(None, 3, None, None)],
+}
 DEPLOYMENT_DICT = {
     "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
     "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
-    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs),
 }
 
 
@@ -87,20 +108,22 @@ class DetectWrapper(Detect):
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
-            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            x[i] = (
+                x[i]
+                .view(bs, self.na, self.no, ny, nx)
+                .permute(0, 1, 3, 4, 2)
+                .contiguous()
+            )
         return x
 
 
-def get_optimizer(model: nn.Module,
-                  lr: float,
-                  momentum: float,
-                  weight_decay: float):
+def get_optimizer(model: nn.Module, lr: float, momentum: float, weight_decay: float):
     """
     Optimizer used from train.py
     https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/train.py#L115-L188
     """
     pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
-    for k, v in model.named_modules():
+    for _, v in model.named_modules():
         if hasattr(v, "bias") and isinstance(v.bias, nn.Parameter):
             pg2.append(v.bias)  # biases
         if isinstance(v, nn.BatchNorm2d):
@@ -166,7 +189,9 @@ def get_optimizer(model: nn.Module,
 
     optimizer = torch.optim.SGD(pg0, lr=lr, momentum=momentum, nesterov=True)
 
-    optimizer.add_param_group({"params": pg1, "weight_decay": weight_decay})  # add pg1 with weight_decay
+    optimizer.add_param_group(
+        {"params": pg1, "weight_decay": weight_decay}
+    )  # add pg1 with weight_decay
     optimizer.add_param_group({"params": pg2})  # add pg2 (biases)
     del pg0, pg1, pg2
 
@@ -207,37 +232,59 @@ def _collate_fn(batch):
         return torch.stack(img, 0), torch.cat(label, 0)
     else:
         return torch.stack(img, 0), (
-            torch.cat(label, 0), [img[0].shape for _ in range(len(img))])
+            torch.cat(label, 0),
+            [img[0].shape for _ in range(len(img))],
+        )
 
 
-def get_loader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-               workers=8, image_weights=False, prefix="", train=True) -> torch.utils.data.DataLoader:
+def get_loader(
+    path,
+    imgsz,
+    batch_size,
+    stride,
+    opt,
+    hyp=None,
+    augment=False,
+    cache=False,
+    pad=0.0,
+    rect=False,
+    workers=8,
+    image_weights=False,
+    prefix="",
+    train=True,
+) -> torch.utils.data.DataLoader:
     """
     Return train/eval Dataloader
     https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/utils/datasets.py#L65
     """
-    dataset = DATASET_WRAPPER(path, imgsz, batch_size,
-                              augment=augment,  # augment images
-                              hyp=hyp,  # augmentation hyperparameters
-                              rect=rect,  # rectangular training
-                              cache_images=cache,
-                              single_cls=opt.single_cls,
-                              stride=int(stride),
-                              pad=pad,
-                              image_weights=image_weights,
-                              prefix=prefix,
-                              train=train)
+    dataset = DATASET_WRAPPER(
+        path,
+        imgsz,
+        batch_size,
+        augment=augment,  # augment images
+        hyp=hyp,  # augmentation hyperparameters
+        rect=rect,  # rectangular training
+        cache_images=cache,
+        single_cls=opt.single_cls,
+        stride=int(stride),
+        pad=pad,
+        image_weights=image_weights,
+        prefix=prefix,
+        train=train,
+    )
 
     batch_size = min(batch_size, len(dataset))
     sampler = None
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
 
-    dataloader = loader(dataset,
-                        batch_size=batch_size,
-                        num_workers=workers,
-                        sampler=sampler,
-                        pin_memory=True,
-                        collate_fn=_collate_fn)
+    dataloader = loader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=workers,
+        sampler=sampler,
+        pin_memory=True,
+        collate_fn=_collate_fn,
+    )
     return dataloader
 
 
@@ -267,20 +314,29 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
     We use this class to preform postprocessing to the model's outputs before calculating the MeanAveragePrecision
     """
 
-    def __init__(self,
-                 anchors: Tensor,
-                 strides: Tensor,
-                 conf_thres: float,
-                 iou_thres: float,
-                 box_format: str = "xyxy",
-                 iou_type: str = "bbox",
-                 iou_thresholds: Optional[List[float]] = None,
-                 rec_thresholds: Optional[List[float]] = None,
-                 max_detection_thresholds: Optional[List[int]] = None,
-                 class_metrics: bool = False,
-                 **kwargs: Any):
-        super().__init__(box_format, iou_type, iou_thresholds, rec_thresholds, max_detection_thresholds, class_metrics,
-                         **kwargs)
+    def __init__(
+        self,
+        anchors: Tensor,
+        strides: Tensor,
+        conf_thres: float,
+        iou_thres: float,
+        box_format: str = "xyxy",
+        iou_type: str = "bbox",
+        iou_thresholds: Optional[List[float]] = None,
+        rec_thresholds: Optional[List[float]] = None,
+        max_detection_thresholds: Optional[List[int]] = None,
+        class_metrics: bool = False,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            box_format,
+            iou_type,
+            iou_thresholds,
+            rec_thresholds,
+            max_detection_thresholds,
+            class_metrics,
+            **kwargs,
+        )
         self.add_state("anchors", default=anchors, persistent=False)
         self.add_state("strides", default=strides, persistent=False)
         self.conf_thres: float = conf_thres
@@ -302,38 +358,55 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         grid = [torch.zeros(1, device=_device)] * len(outputs)  # init grid
         z = []
         for i, output in enumerate(outputs):
-            bs, num_anchors, ny, nx, out_channels = output.shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+            (
+                bs,
+                num_anchors,
+                ny,
+                nx,
+                out_channels,
+            ) = output.shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
 
             if grid[i].shape[2:4] != output.shape[2:4]:
-                yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)], indexing="ij")
-                grid[i] = torch.stack((xv, yv), 2).view((1, 1, ny, nx, 2)).float().to(output.device)
+                yv, xv = torch.meshgrid(
+                    [torch.arange(ny), torch.arange(nx)], indexing="ij"
+                )
+                grid[i] = (
+                    torch.stack((xv, yv), 2)
+                    .view((1, 1, ny, nx, 2))
+                    .float()
+                    .to(output.device)
+                )
 
             y = output.sigmoid()
-            y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + grid[i]) * self.strides[i]  # xy
+            y[..., 0:2] = (y[..., 0:2] * 2.0 - 0.5 + grid[i]) * self.strides[i]  # xy
             y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * anchor_grid[i]  # wh
             z.append(y.reshape(bs, -1, out_channels))
         detections = torch.cat(z, dim=1)
 
         # non max suppression
         # https://github.com/WongKinYiu/yolov7/blob/84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca/utils/general.py#L608
-        detections = non_max_suppression(detections,
-                                         multi_label=False,
-                                         conf_thres=self.conf_thres,
-                                         iou_thres=self.iou_thres)
+        detections = non_max_suppression(
+            detections,
+            multi_label=False,
+            conf_thres=self.conf_thres,
+            iou_thres=self.iou_thres,
+        )
         for i, d in enumerate(detections):
             cur_img_shape: tuple = img_sizes[i]
             _ts = targets[targets[:, 0] == i]  # filter targets
-            _ts[:, 2:] = xywhn2xyxy(_ts[:, 2:], h=cur_img_shape[1], w=cur_img_shape[2], padh=0, padw=0)
+            _ts[:, 2:] = xywhn2xyxy(
+                _ts[:, 2:], h=cur_img_shape[1], w=cur_img_shape[2], padh=0, padw=0
+            )
             super().update(
-                [{
-                    "labels": d[:, -1].ravel().long(),
-                    "scores": d[:, -2].ravel(),
-                    "boxes": d[:, 0:4],  # xyxy
-                }],
-                [{
-                    "labels": _ts[:, 1].ravel().long(),
-                    "boxes": _ts[:, 2:]
-                }])
+                [
+                    {
+                        "labels": d[:, -1].ravel().long(),
+                        "scores": d[:, -2].ravel(),
+                        "boxes": d[:, 0:4],  # xyxy
+                    }
+                ],
+                [{"labels": _ts[:, 1].ravel().long(), "boxes": _ts[:, 2:]}],
+            )
 
     def compute(self) -> dict:
         results: dict = super().compute()
@@ -345,13 +418,13 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
 
 
 def resume_compression(
-        config: argparse.Namespace,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
     engine = PyTorchCompressionEngine()
 
@@ -368,7 +441,7 @@ def resume_compression(
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
         settings=None,
-        multi_gpu=config.multi_gpu
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -381,21 +454,21 @@ def resume_compression(
 
 
 def run_compression(
-        config: argparse.Namespace,
-        model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
-    global DEPLOYMENT_DICT
+    global DEPLOYMENT_DICT, RANDOM_SEED
 
     engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
-
+    # fmt: off
     settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
@@ -416,13 +489,14 @@ def run_compression(
     settings.training_settings.lr_warmup_steps_per_epoch = config.lr_warmup_steps_per_epoch
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
-
+    settings.training_settings.random_seed = RANDOM_SEED
+    # fmt: on
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics
+        evaluation_metrics=eval_metrics,
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -432,7 +506,7 @@ def run_compression(
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
         is_training_from_scratch=config.train_from_scratch,
-        multi_gpu=config.multi_gpu
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -447,13 +521,21 @@ def run_compression(
 def main(config):
     global BASE_DIR, ANCHORS, STRIDES, DATA_YAML, HYP_YAML, IMG_SIZE, CONF_THRESHOLD, IOU_THRESHOLD
 
-    print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
+    print(
+        "\n".join(f"{k}={v}" for k, v in vars(config).items())
+    )  # pretty print argparse
 
-    config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+    config.data = (
+        config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+    )
     if os.path.exists(config.data) is False:
         raise FileNotFoundError("Could not find default dataset please check `--data`")
 
-    config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
+    config.output_dir = (
+        config.output_dir
+        if os.path.isabs(config.output_dir)
+        else str(BASE_DIR / config.output_dir)
+    )
 
     """
     Define Model
@@ -473,21 +555,27 @@ def main(config):
         str(BASE_DIR.joinpath("yolov7", "cfg", "deploy", "yolov7.yaml")),
         ch=3,
         nc=_num_classes,
-        anchors=None
+        anchors=None,
     ).cuda()
 
     resume_compression_flag = False
     if (config.train_from_scratch is False) and (config.ckpt is not None):
-        config.ckpt = config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        config.ckpt = (
+            config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        )
 
         if config.ckpt.rsplit(".", 1)[-1] == "pompom":
-            warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
+            warnings.warn(
+                ".pompom file provided, resuming compression (argparse attributes ignored)"
+            )
             resume_compression_flag = True
         else:
             resume_compression_flag = False
             print(f"loading ckpt from {config.ckpt}")
             ckpt = torch.load(config.ckpt, map_location="cuda")  # load checkpoint
-            model = YoloV7(ckpt["model"].yaml, ch=3, nc=_num_classes, anchors=None).cuda()
+            model = YoloV7(
+                ckpt["model"].yaml, ch=3, nc=_num_classes, anchors=None
+            ).cuda()
             state_dict = ckpt["model"].float().state_dict()  # to FP32
             model.load_state_dict(state_dict, strict=True)
 
@@ -503,8 +591,12 @@ def main(config):
     """
     _nominal_batch_size = 64
     accumulate = max(round(_nominal_batch_size / config.batch_size), 1)
-    hyp["weight_decay"] *= config.batch_size * accumulate / _nominal_batch_size  # scale weight_decay according to batch_size
-    optimizer = get_optimizer(model, config.lr, momentum=hyp["momentum"], weight_decay=hyp["weight_decay"])
+    hyp["weight_decay"] *= (
+        config.batch_size * accumulate / _nominal_batch_size
+    )  # scale weight_decay according to batch_size
+    optimizer = get_optimizer(
+        model, config.lr, momentum=hyp["momentum"], weight_decay=hyp["weight_decay"]
+    )
 
     """
     Define Dataloaders
@@ -515,47 +607,57 @@ def main(config):
     _grid_size = max(int(model.stride.max()), 32)  # grid size = max stride
     _detection_heads = model.model[-1].nl  # number of detection_heads
 
-    get_train_loader = partial(get_loader,
-                               path=train_path,
-                               imgsz=IMG_SIZE,
-                               batch_size=config.batch_size,
-                               stride=_grid_size,
-                               opt=config,
-                               hyp=hyp,
-                               augment=True,
-                               cache=False,
-                               rect=False,
-                               workers=config.workers,
-                               image_weights=False,
-                               prefix=colorstr("train: "),
-                               train=True)
-    get_eval_loader = partial(get_loader,
-                              path=test_path,
-                              imgsz=IMG_SIZE,
-                              batch_size=config.batch_size * 2,
-                              stride=_grid_size,
-                              opt=config,
-                              hyp=hyp,
-                              cache=False,
-                              rect=True,
-                              workers=config.workers,
-                              pad=0.5,
-                              prefix=colorstr("val: "),
-                              train=False)
+    get_train_loader = partial(
+        get_loader,
+        path=train_path,
+        imgsz=IMG_SIZE,
+        batch_size=config.batch_size,
+        stride=_grid_size,
+        opt=config,
+        hyp=hyp,
+        augment=True,
+        cache=False,
+        rect=False,
+        workers=config.workers,
+        image_weights=False,
+        prefix=colorstr("train: "),
+        train=True,
+    )
+    get_eval_loader = partial(
+        get_loader,
+        path=test_path,
+        imgsz=IMG_SIZE,
+        batch_size=config.batch_size * 2,
+        stride=_grid_size,
+        opt=config,
+        hyp=hyp,
+        cache=False,
+        rect=True,
+        workers=config.workers,
+        pad=0.5,
+        prefix=colorstr("val: "),
+        train=False,
+    )
 
     """
     ETC
     ====================================================================================================================
     """
-    hyp["box"] *= 3. / _detection_heads  # scale to layers
-    hyp["cls"] *= _num_classes / 80. * 3. / _detection_heads  # scale to classes and layers
-    hyp["obj"] *= (IMG_SIZE / 640) ** 2 * 3. / _detection_heads  # scale to image size and layers
+    hyp["box"] *= 3.0 / _detection_heads  # scale to layers
+    hyp["cls"] *= (
+        _num_classes / 80.0 * 3.0 / _detection_heads
+    )  # scale to classes and layers
+    hyp["obj"] *= (
+        (IMG_SIZE / 640) ** 2 * 3.0 / _detection_heads
+    )  # scale to image size and layers
     hyp["label_smoothing"] = 0
     model.nc = _num_classes  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # iou loss ratio (obj_loss = 1.0 or iou)
     _labels = get_train_loader().dataset.labels
-    model.class_weights = labels_to_class_weights(_labels, _num_classes).to("cuda") * _num_classes  # attach class weights
+    model.class_weights = (
+        labels_to_class_weights(_labels, _num_classes).to("cuda") * _num_classes
+    )  # attach class weights
     model.names = _names
 
     """
@@ -571,15 +673,17 @@ def main(config):
     ====================================================================================================================
     """
     train_metrics = None
-    eval_metrics = MeanAveragePrecisionWrapper(anchors=torch.clone(ANCHORS),
-                                               strides=torch.clone(STRIDES),
-                                               conf_thres=CONF_THRESHOLD,
-                                               iou_thres=IOU_THRESHOLD)
+    eval_metrics = MeanAveragePrecisionWrapper(
+        anchors=torch.clone(ANCHORS),
+        strides=torch.clone(STRIDES),
+        conf_thres=CONF_THRESHOLD,
+        iou_thres=IOU_THRESHOLD,
+    )
     eval_metrics = {"mAP": eval_metrics}
 
     """
     RUN Compression
-    ====================================================================================================================    
+    ====================================================================================================================
     """
     if resume_compression_flag is True:
         resume_compression(
@@ -589,7 +693,7 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
     else:
         run_compression(
@@ -601,44 +705,45 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CLIKA YOLOv7 Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
-    parser.add_argument("--data", type=str, default="coco", help="Dataset directory")
+    # fmt: off
+    parser = argparse.ArgumentParser(description='CLIKA YOLOv7 Example')
+    parser.add_argument('--target_framework', type=str, default='trt', choices=['tflite', 'ort', 'trt'], help='choose the target framework TensorFlow Lite or TensorRT')
+    parser.add_argument('--data', type=str, default='coco', help='Dataset directory')
 
     # CLIKA Engine Training Settings
-    parser.add_argument("--steps_per_epoch", type=int, default=None, help="Number of steps per epoch")
-    parser.add_argument("--evaluation_steps", type=int, default=None, help="Number of steps for evaluation")
-    parser.add_argument("--stats_steps", type=int, default=50, help="Number of steps for scans")
-    parser.add_argument("--print_interval", type=int, default=50, help="COE print log interval")
-    parser.add_argument("--ma_window_size", type=int, default=20, help="Moving average window size (default: 20)")
-    parser.add_argument("--save_interval", action="store_true", default=None, help="Save interval")
-    parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
-    parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
-    parser.add_argument("--grads_acc_steps", type=int, default=4, help="gradient accumulation steps")
-    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
-    parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
-    parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
-    parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")
-    parser.add_argument("--gradients_checkpoint", action="store_true", default=False, help="Use gradient checkpointing")
+    parser.add_argument('--steps_per_epoch', type=int, default=None, help='Number of steps per epoch')
+    parser.add_argument('--evaluation_steps', type=int, default=None, help='Number of steps for evaluation')
+    parser.add_argument('--stats_steps', type=int, default=50, help='Number of steps for scans')
+    parser.add_argument('--print_interval', type=int, default=50, help='COE print log interval')
+    parser.add_argument('--ma_window_size', type=int, default=20, help='Moving average window size (default: 20)')
+    parser.add_argument('--save_interval', action='store_true', default=None, help='Save interval')
+    parser.add_argument('--reset_train_data', action='store_true', default=False, help='Reset training dataset between epochs')
+    parser.add_argument('--reset_eval_data', action='store_true', default=False, help='Reset evaluation dataset between epochs')
+    parser.add_argument('--grads_acc_steps', type=int, default=4, help='gradient accumulation steps')
+    parser.add_argument('--no_mixed_precision', action='store_false', default=True, dest='mixed_precision', help='Not using Mixed Precision')
+    parser.add_argument('--lr_warmup_epochs', type=int, default=1, help='Learning Rate used in the Learning Rate Warmup stage (default: 1)')
+    parser.add_argument('--lr_warmup_steps_per_epoch', type=int, default=500, help='Number of steps per epoch used in the Learning Rate Warmup stage')
+    parser.add_argument('--fp16_weights', action='store_true', default=False, help='Use FP16 weight (can reduce VRAM usage)')
+    parser.add_argument('--gradients_checkpoint', action='store_true', default=False, help='Use gradient checkpointing')
 
     # Model Training Setting
-    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train the model (default: 100)")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training and evaluation (default: 4)")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
-    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
-    parser.add_argument("--ckpt", type=str, default="yolov7.pt", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
-    parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
-    parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
-    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs to train the model (default: 100)')
+    parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training and evaluation (default: 4)')
+    parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate for the optimizer (default: 1e-5)')
+    parser.add_argument('--workers', type=int, default=4, help='Number of worker processes for data loading (default: 4)')
+    parser.add_argument('--ckpt', type=str, default='yolov7.pt', help='Path to load the model checkpoints (e.g. .pth, .pompom)')
+    parser.add_argument('--output_dir', type=str, default='outputs', help='Output directory for saving results and checkpoints (default: outputs)')
+    parser.add_argument('--train_from_scratch', action='store_true', help='Train the model from scratch')
+    parser.add_argument('--multi_gpu', action='store_true', help='Use Multi-GPU Distributed Compression')
 
     # Quantization Config
-    parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")
-    parser.add_argument("--activations_num_bits", type=int, default=8, help="How many bits to use for the Activation for Quantization")
+    parser.add_argument('--weights_num_bits', type=int, default=8, help='How many bits to use for the Weights for Quantization')
+    parser.add_argument('--activations_num_bits', type=int, default=8, help='How many bits to use for the Activation for Quantization')
 
     args = parser.parse_args()
     args.single_cls = False  # required for dataloader

@@ -1,14 +1,23 @@
 # YOLOX Compressing Example
-<ins>CLIKA SDK</ins> example to compress `YOLOX` model on `COCO` dataset
+<!--TOC-->
 
+- [Requirements](#requirements)
+- [Prepare Dataset](#prepare-dataset)
+- [Run Example](#run-example)
+  - [Know Issues](#know-issues)
+- [References](#references)
 
-# Requirements
+<!--TOC-->
+
+_CLIKA SDK_ example to compress `YOLOX` model on `COCO` dataset
+
+## Requirements
 
 - Python >= 3.8
-- CLIKA SDK (https://docs.clika.io/docs/installation)
+- CLIKA SDK (<https://docs.clika.io/docs/installation>)
 - Clone YOLOX project & Install dependencies
 
-```
+```shell
 # pwd: object_detection/yolox
 git clone https://github.com/Megvii-BaseDetection/YOLOX.git
 cd YOLOX
@@ -21,18 +30,18 @@ pip install torchmetrics==1.0.1
 wget https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.pth
 ```
 
-# Prepare Dataset
+## Prepare Dataset
 
 Run the following script
 
-```
+```shell
 # pwd: object_detection/yolox
 sh prepare_coco_dataset.sh
 ```
 
 The dataset directory tree should look like the following:
 
-```
+```text
 COCO
 ├── annotations
 ├── test2017
@@ -42,25 +51,26 @@ COCO
 
 OR
 
-You may download COCO dataset from [official website](https://cocodataset.org/#download) and unzip.
+You may download COCO dataset from [official website](https://cocodataset.org/#download)
+and unzip.
 
-# Run Examples
+## Run Example
 
-```
+```shell
 # pwd: object_detection/yolox
 python3 yolox_main.py
 ```
 
 ### Know Issues
 
-If this error message appear
+If this error message appear:
 
-```
+```text
 [1]    704647 segmentation fault (core dumped)  python yolox_main.py ...
 ```
 
-One possible solution is to reduce the number of workers and batch size
+A possible solution is to reduce the number of workers and batch size.
 
-# References
+## References
 
-https://github.com/Megvii-BaseDetection/YOLOX
+<https://github.com/Megvii-BaseDetection/YOLOX>

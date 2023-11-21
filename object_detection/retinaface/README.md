@@ -1,18 +1,25 @@
 # RetinaFace Compressing Example
+<!--TOC-->
 
-<ins>CLIKA SDK</ins> example to compress `RetinaFace` model on `WiderFace` dataset
+- [Requirements](#requirements)
+- [Prepare Dataset](#prepare-dataset)
+- [Run Example](#run-example)
+- [References](#references)
+
+<!--TOC-->
+
+_CLIKA SDK_ example to compress `RetinaFace` model on `WiderFace` dataset
 
 This examples requires "[Pytorch_Retinaface](https://github.com/biubug6/Pytorch_Retinaface.git)" repository load the RetinaFace
 model and dataset  operation to the optimizer in order to conform with the RetinaFace repository as close as possible
 
-
-# Requirements
+## Requirements
 
 - Python >= 3.8
-- CLIKA SDK (https://docs.clika.io/docs/installation)
+- CLIKA SDK (<https://docs.clika.io/docs/installation>)
 - Clone RetinaFace project & Install dependencies
 
-```
+```shell
 # pwd: object_detection/retinaface
 git clone https://github.com/biubug6/Pytorch_Retinaface.git
 cd Pytorch_Retinaface
@@ -27,18 +34,18 @@ Download trained checkpoint `Resnet50_Final.pth` from the following [link](https
 
 Place it under `object_detection/retinaface`.
 
-# Prepare Dataset
+## Prepare Dataset
 
 To download and prepare the dataset simply run the following command:
 
-```
+```shell
 # pwd: object_detection/retinaface
 sh prepare_widerface_dataset.sh
 ```
 
 The dataset directory tree should look like the following:
 
-```
+```text
 object_detection/retinaface/
 ├── widerface/
 │   ├── wider_face_split/
@@ -60,13 +67,13 @@ object_detection/retinaface/
 ...
 ```
 
-# Run Examples
+## Run Example
 
-```
+```shell
 # pwd: object_detection/retinaface
 python3 retinaface_main.py
 ```
 
-# References
+## References
 
-https://github.com/biubug6/Pytorch_Retinaface
+<https://github.com/biubug6/Pytorch_Retinaface>

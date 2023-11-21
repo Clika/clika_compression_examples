@@ -1,18 +1,23 @@
 import argparse
 import os
+import random
 import sys
 import warnings
 from functools import partial
 from pathlib import Path
 from typing import Optional, List, Any, Dict, Callable, Union
 
+import numpy as np
 import torch
 import torchvision
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
-from clika_compression.settings import (
-    generate_default_settings, ModelCompileSettings
+from clika_compression import (
+    PyTorchCompressionEngine,
+    QATQuantizationSettings,
+    DeploymentSettings_TensorRT_ONNX,
+    DeploymentSettings_TFLite,
+    DeploymentSettings_ONNXRuntime_ONNX,
 )
+from clika_compression.settings import generate_default_settings, ModelCompileSettings
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
@@ -21,25 +26,38 @@ from torchvision import transforms
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR / "pytorch-retinanet"))
 from retinanet.model import ResNet
-
-from retinanet.dataloader import collater, CocoDataset, Normalizer, Resizer, Augmenter, AspectRatioBasedSampler
+from retinanet.dataloader import (
+    collater,
+    CocoDataset,
+    Normalizer,
+    Resizer,
+    Augmenter,
+    AspectRatioBasedSampler,
+)
 from retinanet.losses import FocalLoss
 from retinanet.utils import Bottleneck, BBoxTransform, ClipBoxes
 from retinanet.anchors import Anchors
 
+RANDOM_SEED = 0
+torch.manual_seed(RANDOM_SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(RANDOM_SEED)
+random.seed(RANDOM_SEED)
 
 IOU_THRESHOLD = 0.65
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
-deployment_kwargs = {'graph_author': "CLIKA",
-                     "graph_description": None,
-                     "input_shapes_for_deployment": [(None, 3, None, None)]}
+deployment_kwargs = {
+    "graph_author": "CLIKA",
+    "graph_description": None,
+    "input_shapes_for_deployment": [(None, 3, None, None)],
+}
 DEPLOYMENT_DICT = {
     "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
     "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
-    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs),
 }
-
 
 
 # Define Class/Function Wrappers
@@ -57,10 +75,10 @@ class Retinanet(ResNet):
 
         # Anchors related field variables
         self.pyramid_levels = [3, 4, 5, 6, 7]
-        self.strides = [2 ** x for x in self.pyramid_levels]
+        self.strides = [2**x for x in self.pyramid_levels]
         self.sizes = [2 ** (x + 2) for x in self.pyramid_levels]
         self.ratios = torch.tensor([0.5, 1, 2])
-        self.scales = torch.tensor([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
+        self.scales = torch.tensor([2**0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
 
     def forward(self, image_batch):
         x = self.conv1(image_batch)
@@ -75,17 +93,22 @@ class Retinanet(ResNet):
 
         features = self.fpn([x2, x3, x4])
 
-        regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+        regression = torch.cat(
+            [self.regressionModel(feature) for feature in features], dim=1
+        )
 
-        classification = torch.cat([self.classificationModel(feature) for feature in features], dim=1)
+        classification = torch.cat(
+            [self.classificationModel(feature) for feature in features], dim=1
+        )
 
         return classification, regression
 
 
 class ClipBoxesWrapper(ClipBoxes):
-
     def forward(self, boxes, shape):
-        img = torch.ones(*shape)  # dummy tensor to pass tensor shape information to actual ClipBoxes
+        img = torch.ones(
+            *shape
+        )  # dummy tensor to pass tensor shape information to actual ClipBoxes
         return super().forward(boxes, img)
 
 
@@ -108,25 +131,46 @@ def get_loader(path, batch_size, workers, train=True) -> torch.utils.data.DataLo
     https://github.com/yhenon/pytorch-retinanet/blob/0348a9d57b279e3b5b235461b472d37da5feec3d/train.py#L69-L74
     """
     if train is True:
-        dataset = CocoDataset(path, set_name='train2017',
-                              transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-        sampler = AspectRatioBasedSampler(dataset, batch_size=batch_size, drop_last=False)
-        dataloader = DataLoader(dataset, num_workers=workers, collate_fn=collater_wrapper, batch_sampler=sampler)
+        dataset = CocoDataset(
+            path,
+            set_name="train2017",
+            transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]),
+        )
+        sampler = AspectRatioBasedSampler(
+            dataset, batch_size=batch_size, drop_last=False
+        )
+        dataloader = DataLoader(
+            dataset,
+            num_workers=workers,
+            collate_fn=collater_wrapper,
+            batch_sampler=sampler,
+        )
 
     else:
-        dataset = CocoDataset(path, set_name='val2017',
-                              transform=transforms.Compose([Normalizer(), Resizer()]))
-        sampler = AspectRatioBasedSampler(dataset, batch_size=batch_size, drop_last=False)
-        dataloader = DataLoader(dataset, num_workers=workers, collate_fn=collater_wrapper, batch_sampler=sampler)
+        dataset = CocoDataset(
+            path,
+            set_name="val2017",
+            transform=transforms.Compose([Normalizer(), Resizer()]),
+        )
+        sampler = AspectRatioBasedSampler(
+            dataset, batch_size=batch_size, drop_last=False
+        )
+        dataloader = DataLoader(
+            dataset,
+            num_workers=workers,
+            collate_fn=collater_wrapper,
+            batch_sampler=sampler,
+        )
 
     return dataloader
 
 
-class CRITERION_WRAPPER(object):
+class CRITERION_WRAPPER:
     """
     Since we have overwritten Retinanet forward call
     Change loss_fn's parameters accordingly
     """
+
     def __init__(self):
         self.loss_fn = FocalLoss()
         self.anchors = Anchors()
@@ -143,17 +187,27 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
     A custom metric class that inherits from a torchmetrics object.
     We use this class to preform postprocessing to the model's outputs before calculating the MeanAveragePrecision
     """
-    def __init__(self,
-                 iou_thres: float,
-                 box_format: str = "xyxy",
-                 iou_type: str = "bbox",
-                 iou_thresholds: Optional[List[float]] = None,
-                 rec_thresholds: Optional[List[float]] = None,
-                 max_detection_thresholds: Optional[List[int]] = None,
-                 class_metrics: bool = False,
-                 **kwargs: Any):
-        super().__init__(box_format, iou_type, iou_thresholds, rec_thresholds, max_detection_thresholds, class_metrics,
-                         **kwargs)
+
+    def __init__(
+        self,
+        iou_thres: float,
+        box_format: str = "xyxy",
+        iou_type: str = "bbox",
+        iou_thresholds: Optional[List[float]] = None,
+        rec_thresholds: Optional[List[float]] = None,
+        max_detection_thresholds: Optional[List[int]] = None,
+        class_metrics: bool = False,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            box_format,
+            iou_type,
+            iou_thresholds,
+            rec_thresholds,
+            max_detection_thresholds,
+            class_metrics,
+            **kwargs,
+        )
 
         self.anchors = Anchors()
 
@@ -187,7 +241,9 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
 
         for i in range(classification.shape[2]):
             scores = torch.squeeze(classification[:, :, i])
-            scores_over_thresh = (scores >= 0.05)  # TODO: if only interested in mAP@50 or mAP@75 can set it higher. will make your code faster
+            scores_over_thresh = (
+                scores >= 0.05
+            )  # TODO: if only interested in mAP@50 or mAP@75 can set it higher. will make your code faster
             if scores_over_thresh.sum() == 0:
                 # no boxes to NMS, just continue
                 continue
@@ -206,22 +262,35 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
             if torch.cuda.is_available():
                 finalAnchorBoxesIndexesValue = finalAnchorBoxesIndexesValue.cuda()
 
-            finalAnchorBoxesIndexes = torch.cat((finalAnchorBoxesIndexes, finalAnchorBoxesIndexesValue))
-            finalAnchorBoxesCoordinates = torch.cat((finalAnchorBoxesCoordinates, anchorBoxes[anchors_nms_idx]))
+            finalAnchorBoxesIndexes = torch.cat(
+                (finalAnchorBoxesIndexes, finalAnchorBoxesIndexesValue)
+            )
+            finalAnchorBoxesCoordinates = torch.cat(
+                (finalAnchorBoxesCoordinates, anchorBoxes[anchors_nms_idx])
+            )
 
-        scores, classification, transformed_anchors = finalScores, finalAnchorBoxesIndexes, finalAnchorBoxesCoordinates
+        scores, classification, transformed_anchors = (
+            finalScores,
+            finalAnchorBoxesIndexes,
+            finalAnchorBoxesCoordinates,
+        )
         transformed_anchors = transformed_anchors / scale[0]
 
         super().update(
-            [{
-                "labels": classification,
-                "scores": scores,
-                "boxes": transformed_anchors,  # xyxy
-            }],
-            [{
-                "labels": annotations[0][:, 4].long(),
-                "boxes": annotations[0][:, :4] / scale[0]
-            }])
+            [
+                {
+                    "labels": classification,
+                    "scores": scores,
+                    "boxes": transformed_anchors,  # xyxy
+                }
+            ],
+            [
+                {
+                    "labels": annotations[0][:, 4].long(),
+                    "boxes": annotations[0][:, :4] / scale[0],
+                }
+            ],
+        )
 
     def compute(self) -> dict:
         results: dict = super().compute()
@@ -233,13 +302,13 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
 
 
 def resume_compression(
-        config: argparse.Namespace,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
     engine = PyTorchCompressionEngine()
 
@@ -255,10 +324,8 @@ def resume_compression(
         model_compile_settings=mcs,
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
-
         settings=None,
-        multi_gpu=config.multi_gpu
-
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -271,21 +338,21 @@ def resume_compression(
 
 
 def run_compression(
-        config: argparse.Namespace,
-        model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
-    global DEPLOYMENT_DICT
+    global DEPLOYMENT_DICT, RANDOM_SEED
 
     engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
-
+    # fmt: off
     settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
@@ -307,15 +374,14 @@ def run_compression(
     settings.training_settings.lr_warmup_steps_per_epoch = config.lr_warmup_steps_per_epoch
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
-
-
+    settings.training_settings.random_seed = RANDOM_SEED
+    # fmt: on
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics
-
+        evaluation_metrics=eval_metrics,
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -325,7 +391,7 @@ def run_compression(
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
         is_training_from_scratch=config.train_from_scratch,
-        multi_gpu=config.multi_gpu
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -340,15 +406,23 @@ def run_compression(
 def main(config):
     global BASE_DIR, IOU_THRESHOLD
 
-    print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
+    print(
+        "\n".join(f"{k}={v}" for k, v in vars(config).items())
+    )  # pretty print argparse
 
     resume_compression_flag = False
 
-    config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+    config.data = (
+        config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+    )
     if os.path.exists(config.data) is False:
         raise FileNotFoundError("Could not find default dataset please check `--data`")
 
-    config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
+    config.output_dir = (
+        config.output_dir
+        if os.path.isabs(config.output_dir)
+        else str(BASE_DIR / config.output_dir)
+    )
 
     """
     Define Model
@@ -357,16 +431,27 @@ def main(config):
     model = Retinanet(80, Bottleneck, [3, 4, 6, 3])
 
     if config.train_from_scratch is False:
-        config.ckpt = config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        config.ckpt = (
+            config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        )
 
         if config.ckpt.rsplit(".", 1)[-1] == "pompom":
-            warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
+            warnings.warn(
+                ".pompom file provided, resuming compression (argparse attributes ignored)"
+            )
             resume_compression_flag = True
         else:
             print(f"loading ckpt from {config.ckpt}")
 
             import torch.utils.model_zoo as model_zoo
-            model.load_state_dict(model_zoo.load_url("https://download.pytorch.org/models/resnet50-19c8e357.pth", model_dir='.'), strict=False)
+
+            model.load_state_dict(
+                model_zoo.load_url(
+                    "https://download.pytorch.org/models/resnet50-19c8e357.pth",
+                    model_dir=".",
+                ),
+                strict=False,
+            )
             model.load_state_dict(torch.load(config.ckpt))
 
     """
@@ -387,8 +472,16 @@ def main(config):
     Define Dataloaders
     ====================================================================================================================
     """
-    get_train_loader = partial(get_loader, batch_size=config.batch_size, workers=config.workers, path=config.data, train=True)
-    get_eval_loader = partial(get_loader, batch_size=1, workers=config.workers, path=config.data, train=False)
+    get_train_loader = partial(
+        get_loader,
+        batch_size=config.batch_size,
+        workers=config.workers,
+        path=config.data,
+        train=True,
+    )
+    get_eval_loader = partial(
+        get_loader, batch_size=1, workers=config.workers, path=config.data, train=False
+    )
 
     """
     Define Metric Wrapper
@@ -400,7 +493,7 @@ def main(config):
 
     """
     RUN Compression
-    ====================================================================================================================    
+    ====================================================================================================================
     """
     if resume_compression_flag is True:
         resume_compression(
@@ -410,7 +503,7 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
     else:
         run_compression(
@@ -422,46 +515,45 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CLIKA RetinaNet Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
-
-    parser.add_argument("--data", type=str, default="coco", help="Dataset directory")
+    # fmt: off
+    parser = argparse.ArgumentParser(description='CLIKA RetinaNet Example')
+    parser.add_argument('--target_framework', type=str, default='trt', choices=['tflite', 'ort', 'trt'], help='choose the target framework TensorFlow Lite or TensorRT')
+    parser.add_argument('--data', type=str, default='coco', help='Dataset directory')
 
     # CLIKA Engine Training Settings
-    parser.add_argument("--steps_per_epoch", type=int, default=None, help="Number of steps per epoch")
-    parser.add_argument("--evaluation_steps", type=int, default=None, help="Number of steps for evaluation")
-    parser.add_argument("--stats_steps", type=int, default=50, help="Number of steps for scans")
-    parser.add_argument("--print_interval", type=int, default=50, help="COE print log interval")
-    parser.add_argument("--ma_window_size", type=int, default=20, help="Moving average window size (default: 20)")
-    parser.add_argument("--save_interval", action="store_true", default=None, help="Save interval")
-    parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
-    parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
-    parser.add_argument("--grads_acc_steps", type=int, default=4, help="gradient accumulation steps")
-    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
-    parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
-    parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
-    parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")
-    parser.add_argument("--gradients_checkpoint", action="store_true", default=False, help="Use gradient checkpointing")
+    parser.add_argument('--steps_per_epoch', type=int, default=None, help='Number of steps per epoch')
+    parser.add_argument('--evaluation_steps', type=int, default=None, help='Number of steps for evaluation')
+    parser.add_argument('--stats_steps', type=int, default=50, help='Number of steps for scans')
+    parser.add_argument('--print_interval', type=int, default=50, help='COE print log interval')
+    parser.add_argument('--ma_window_size', type=int, default=20, help='Moving average window size (default: 20)')
+    parser.add_argument('--save_interval', action='store_true', default=None, help='Save interval')
+    parser.add_argument('--reset_train_data', action='store_true', default=False, help='Reset training dataset between epochs')
+    parser.add_argument('--reset_eval_data', action='store_true', default=False, help='Reset evaluation dataset between epochs')
+    parser.add_argument('--grads_acc_steps', type=int, default=4, help='gradient accumulation steps')
+    parser.add_argument('--no_mixed_precision', action='store_false', default=True, dest='mixed_precision', help='Not using Mixed Precision')
+    parser.add_argument('--lr_warmup_epochs', type=int, default=1, help='Learning Rate used in the Learning Rate Warmup stage (default: 1)')
+    parser.add_argument('--lr_warmup_steps_per_epoch', type=int, default=500, help='Number of steps per epoch used in the Learning Rate Warmup stage')
+    parser.add_argument('--fp16_weights', action='store_true', default=False, help='Use FP16 weight (can reduce VRAM usage)')
+    parser.add_argument('--gradients_checkpoint', action='store_true', default=False, help='Use gradient checkpointing')
 
     # Model Training Setting
-    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train the model (default: 100)")
-    parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training and evaluation (default: 2)")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
-    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
-    parser.add_argument("--ckpt", type=str, default="coco_resnet_50_map_0_335_state_dict.pt", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
-    parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
-    parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
-    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
-
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs to train the model (default: 100)')
+    parser.add_argument('--batch_size', type=int, default=2, help='Batch size for training and evaluation (default: 2)')
+    parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate for the optimizer (default: 1e-5)')
+    parser.add_argument('--workers', type=int, default=4, help='Number of worker processes for data loading (default: 4)')
+    parser.add_argument('--ckpt', type=str, default='coco_resnet_50_map_0_335_state_dict.pt', help='Path to load the model checkpoints (e.g. .pth, .pompom)')
+    parser.add_argument('--output_dir', type=str, default='outputs', help='Output directory for saving results and checkpoints (default: outputs)')
+    parser.add_argument('--train_from_scratch', action='store_true', help='Train the model from scratch')
+    parser.add_argument('--multi_gpu', action='store_true', help='Use Multi-GPU Distributed Compression')
 
     # Quantization Config
-    parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")
-    parser.add_argument("--activations_num_bits", type=int, default=8, help="How many bits to use for the Activation for Quantization")
+    parser.add_argument('--weights_num_bits', type=int, default=8, help='How many bits to use for the Weights for Quantization')
+    parser.add_argument('--activations_num_bits', type=int, default=8, help='How many bits to use for the Activation for Quantization')
 
     args = parser.parse_args()
 

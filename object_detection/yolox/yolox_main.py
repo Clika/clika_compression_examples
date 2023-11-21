@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 import sys
 import warnings
 from functools import partial
@@ -8,11 +9,14 @@ from typing import Optional, List, Any, Dict, Callable, Union
 
 import numpy as np
 import torch
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
-from clika_compression.settings import (
-    generate_default_settings, ModelCompileSettings
+from clika_compression import (
+    PyTorchCompressionEngine,
+    QATQuantizationSettings,
+    DeploymentSettings_TensorRT_ONNX,
+    DeploymentSettings_TFLite,
+    DeploymentSettings_ONNXRuntime_ONNX,
 )
+from clika_compression.settings import generate_default_settings, ModelCompileSettings
 from torch.utils.data import Dataset
 from torchmetrics.detection import MeanAveragePrecision
 
@@ -26,6 +30,13 @@ from yolox.data import (
 from yolox.data.data_augment import preproc
 from yolox.utils import postprocess
 
+RANDOM_SEED = 0
+torch.manual_seed(RANDOM_SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(RANDOM_SEED)
+random.seed(RANDOM_SEED)
+
 VAL_ANN = "instances_val2017.json"
 MODEL_NAME = "yolox-s"
 IMG_SIZE = (640, 640)
@@ -33,18 +44,21 @@ IOU_THRESHOLD = 0.65
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
-deployment_kwargs = {'graph_author': "CLIKA",
-                     "graph_description": None,
-                     "input_shapes_for_deployment": [(None, 3, None, None)]}
+deployment_kwargs = {
+    "graph_author": "CLIKA",
+    "graph_description": None,
+    "input_shapes_for_deployment": [(None, 3, None, None)],
+}
 DEPLOYMENT_DICT = {
     "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
     "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
-    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs),
 }
 
 
 # Define Class/Function Wrappers
 # ==================================================================================================================== #
+
 
 class HeadtWrapper(YOLOXHead):
     def __init__(self):
@@ -55,7 +69,7 @@ class HeadtWrapper(YOLOXHead):
 
         # https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L149-L161
         for k, (cls_conv, reg_conv, _x) in enumerate(
-                zip(self.cls_convs, self.reg_convs, x)
+            zip(self.cls_convs, self.reg_convs, x)
         ):
             _x = self.stems[k](_x)
             cls_x = _x
@@ -91,11 +105,16 @@ class CRITERION_WRAPPER(object):
         expanded_strides = []
         origin_preds = []
 
-        p = [p[i * 3:i * 3 + 3] for i in range(3)]
+        p = [p[i * 3 : i * 3 + 3] for i in range(3)]
         targets = targets.to(p[0][0].device)
 
         for k, (cls_conv, reg_conv, stride_this_level, _p) in enumerate(
-                zip(self.head_module.cls_convs, self.head_module.reg_convs, self.head_module.strides, p)
+            zip(
+                self.head_module.cls_convs,
+                self.head_module.reg_convs,
+                self.head_module.strides,
+                p,
+            )
         ):
             # concat (bbox[4], conf[1], cls[1])
             # https://github.com/Megvii-BaseDetection/YOLOX/blob/ac58e0a5e68e57454b7b9ac822aced493b553c53/yolox/models/yolo_head.py#L164
@@ -105,27 +124,30 @@ class CRITERION_WRAPPER(object):
                 output, k, stride_this_level, p[0][0].type()
             )
             x_shifts.append(grid[:, :, 0])  # repeat of shifts (e.g. (0~79) * 80)
-            y_shifts.append(grid[:, :, 1])  # repeat of shifts (e.g. (0, 0, 0, ... 0, 1, 1, 1, ... 1, ...) * 80)
+            y_shifts.append(
+                grid[:, :, 1]
+            )  # repeat of shifts (e.g. (0, 0, 0, ... 0, 1, 1, 1, ... 1, ...) * 80)
             expanded_strides.append(
-                torch.zeros(1, grid.shape[1])
-                .fill_(stride_this_level)
-                .type_as(p[0][0])
+                torch.zeros(1, grid.shape[1]).fill_(stride_this_level).type_as(p[0][0])
             )
             outputs.append(output)
 
             # =========== L1 loss =========== #
             batch_size = reg_output.shape[0]
             hsize, wsize = reg_output.shape[-2:]
-            reg_output = reg_output.view(
-                batch_size, 1, 4, hsize, wsize
-            )
-            reg_output = reg_output.permute(0, 1, 3, 4, 2).reshape(
-                batch_size, -1, 4
-            )
+            reg_output = reg_output.view(batch_size, 1, 4, hsize, wsize)
+            reg_output = reg_output.permute(0, 1, 3, 4, 2).reshape(batch_size, -1, 4)
             origin_preds.append(reg_output.clone())
             # =========== L1 loss =========== #
 
-        loss, iou_loss, conf_loss, cls_loss, l1_loss, num_fg = self.head_module.get_losses(
+        (
+            loss,
+            iou_loss,
+            conf_loss,
+            cls_loss,
+            l1_loss,
+            num_fg,
+        ) = self.head_module.get_losses(
             imgs=None,
             x_shifts=x_shifts,
             y_shifts=y_shifts,
@@ -137,7 +159,10 @@ class CRITERION_WRAPPER(object):
         )
 
         loss_dict = {
-            "iou_loss": iou_loss, "conf_loss": conf_loss, "cls_loss": cls_loss, "l1_loss": l1_loss
+            "iou_loss": iou_loss,
+            "conf_loss": conf_loss,
+            "cls_loss": cls_loss,
+            "l1_loss": l1_loss,
         }
         return loss_dict
 
@@ -196,7 +221,7 @@ def get_eval_loader_(config):
         "num_workers": config.workers,
         "pin_memory": True,
         "sampler": sampler,
-        "collate_fn": collate_fn_eval
+        "collate_fn": collate_fn_eval,
     }
     loader = torch.utils.data.DataLoader(dataset, **dataloader_kwargs)
 
@@ -209,18 +234,27 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
     We use this class to preform postprocessing to the model's outputs before calculating the MeanAveragePrecision
     """
 
-    def __init__(self,
-                 strides: tuple,
-                 iou_thres: float,
-                 box_format: str = "xyxy",
-                 iou_type: str = "bbox",
-                 iou_thresholds: Optional[List[float]] = None,
-                 rec_thresholds: Optional[List[float]] = None,
-                 max_detection_thresholds: Optional[List[int]] = None,
-                 class_metrics: bool = False,
-                 **kwargs: Any):
-        super().__init__(box_format, iou_type, iou_thresholds, rec_thresholds, max_detection_thresholds, class_metrics,
-                         **kwargs)
+    def __init__(
+        self,
+        strides: tuple,
+        iou_thres: float,
+        box_format: str = "xyxy",
+        iou_type: str = "bbox",
+        iou_thresholds: Optional[List[float]] = None,
+        rec_thresholds: Optional[List[float]] = None,
+        max_detection_thresholds: Optional[List[int]] = None,
+        class_metrics: bool = False,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            box_format,
+            iou_type,
+            iou_thresholds,
+            rec_thresholds,
+            max_detection_thresholds,
+            class_metrics,
+            **kwargs,
+        )
         self.iou_thres = iou_thres
         self.strides = strides
         self.num_classes = 80
@@ -235,14 +269,17 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         grids = []
         _strides = []
         for (hsize, wsize), stride in zip(heads_hw, self.strides):
-            yv, xv = torch.meshgrid(torch.arange(hsize), torch.arange(wsize), indexing="ij")
+            yv, xv = torch.meshgrid(
+                torch.arange(hsize), torch.arange(wsize), indexing="ij"
+            )
             yv = yv.to(_device)
             xv = xv.to(_device)
             grid = torch.stack((xv, yv), 2).view(1, -1, 2)
             grids.append(grid)
             shape = grid.shape[:2]
             _strides.append(
-                torch.full((*shape, 1), stride, device=_device))  # (1, 80*80, 1), (1, 40*40, 1), (1, 20*20, 1)
+                torch.full((*shape, 1), stride, device=_device)
+            )  # (1, 80*80, 1), (1, 40*40, 1), (1, 20*20, 1)
 
         grids = torch.cat(grids, dim=1)  # (1, 8400, 2)
         _strides = torch.cat(_strides, dim=1)  # (1, 8400, 1)
@@ -260,7 +297,7 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         labels = [l.to(outputs[0].device) for l in labels]
 
         # postprocessing  TODO: include in nn.Module graph
-        outputs = [outputs[i * 3:i * 3 + 3] for i in range(3)]
+        outputs = [outputs[i * 3 : i * 3 + 3] for i in range(3)]
         multi_H_outputs = []
         for o in outputs:
             reg_output, obj_output, cls_output = o
@@ -276,22 +313,28 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
         merged_outputs = self._decode_outputs(merged_outputs, outputs_hw)
 
         # convert output from cxcywh -> xyxy format
-        detections = postprocess(merged_outputs, num_classes=self.num_classes, conf_thre=0.05, nms_thre=self.iou_thres, class_agnostic=False)
+        detections = postprocess(
+            merged_outputs,
+            num_classes=self.num_classes,
+            conf_thre=0.05,
+            nms_thre=self.iou_thres,
+            class_agnostic=False,
+        )
 
         for p, t in zip(detections, labels):
             if p is None:
                 continue
             box, obj_conf, class_conf, class_label = p.split([4, 1, 1, 1], 1)
             super().update(
-                [{
-                    "labels": class_label.ravel().long(),
-                    "scores": (obj_conf * class_conf).ravel(),
-                    "boxes": box,  # xyxy
-                }],
-                [{
-                    "labels": t[:, -1].ravel().long(),
-                    "boxes": t[:, :4]
-                }])
+                [
+                    {
+                        "labels": class_label.ravel().long(),
+                        "scores": (obj_conf * class_conf).ravel(),
+                        "boxes": box,  # xyxy
+                    }
+                ],
+                [{"labels": t[:, -1].ravel().long(), "boxes": t[:, :4]}],
+            )
 
     def compute(self) -> dict:
         results: dict = super().compute()
@@ -303,13 +346,13 @@ class MeanAveragePrecisionWrapper(MeanAveragePrecision):
 
 
 def resume_compression(
-        config: argparse.Namespace,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
     engine = PyTorchCompressionEngine()
 
@@ -326,7 +369,7 @@ def resume_compression(
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
         settings=None,
-        multi_gpu=config.multi_gpu
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -339,21 +382,21 @@ def resume_compression(
 
 
 def run_compression(
-        config: argparse.Namespace,
-        model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
-    global DEPLOYMENT_DICT
+    global DEPLOYMENT_DICT, RANDOM_SEED
 
     engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
-
+    # fmt: off
     settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
@@ -375,13 +418,14 @@ def run_compression(
     settings.training_settings.lr_warmup_steps_per_epoch = config.lr_warmup_steps_per_epoch
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
-
+    settings.training_settings.random_seed = RANDOM_SEED
+    # fmt: on
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics
+        evaluation_metrics=eval_metrics,
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -391,7 +435,7 @@ def run_compression(
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
         is_training_from_scratch=config.train_from_scratch,
-        multi_gpu=config.multi_gpu
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -406,13 +450,21 @@ def run_compression(
 def main(config):
     global BASE_DIR, VAL_ANN, MODEL_NAME, IMG_SIZE, IOU_THRESHOLD
 
-    print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
+    print(
+        "\n".join(f"{k}={v}" for k, v in vars(config).items())
+    )  # pretty print argparse
 
-    config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+    config.data = (
+        config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+    )
     if os.path.exists(config.data) is False:
         raise FileNotFoundError("Could not find default dataset please check `--data`")
 
-    config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
+    config.output_dir = (
+        config.output_dir
+        if os.path.isabs(config.output_dir)
+        else str(BASE_DIR / config.output_dir)
+    )
 
     """
     Define Model
@@ -434,10 +486,14 @@ def main(config):
     resume_compression_flag = False
     _optimizer_state_dict = None
     if config.train_from_scratch is False:
-        config.ckpt = config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        config.ckpt = (
+            config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        )
 
         if config.ckpt.rsplit(".", 1)[-1] == "pompom":
-            warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
+            warnings.warn(
+                ".pompom file provided, resuming compression (argparse attributes ignored)"
+            )
             resume_compression_flag = True
         else:
             print(f"loading ckpt from {config.ckpt}")
@@ -462,7 +518,9 @@ def main(config):
     """
     optimizer = exp.get_optimizer(config.batch_size)
     if _optimizer_state_dict:  # if ckpt provided
-        warnings.warn("using optimizer state dict from checkpoint (`--lr` cmd argument is ignored)")
+        warnings.warn(
+            "using optimizer state dict from checkpoint (`--lr` cmd argument is ignored)"
+        )
         optimizer.load_state_dict(ckpt["optimizer"])
     # override the lr with the value that was set by the user
     optimizer.defaults["lr"] = config.lr
@@ -494,14 +552,14 @@ def main(config):
     ====================================================================================================================
     """
     eval_metrics = MeanAveragePrecisionWrapper(
-        strides=(8, 16, 32),
-        iou_thres=IOU_THRESHOLD)
+        strides=(8, 16, 32), iou_thres=IOU_THRESHOLD
+    )
     eval_metrics = {"mAP": eval_metrics}
     train_metrics = None
 
     """
     RUN Compression
-    ====================================================================================================================    
+    ====================================================================================================================
     """
 
     if resume_compression_flag is True:
@@ -512,7 +570,7 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
 
     else:
@@ -525,44 +583,45 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CLIKA YOLOX Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
-    parser.add_argument("--data", type=str, default="COCO", help="Dataset directory")
+    # fmt: off
+    parser = argparse.ArgumentParser(description='CLIKA YOLOX Example')
+    parser.add_argument('--target_framework', type=str, default='trt', choices=['tflite', 'ort', 'trt'], help='choose the target framework TensorFlow Lite or TensorRT')
+    parser.add_argument('--data', type=str, default='COCO', help='Dataset directory')
 
     # CLIKA Engine Training Settings
-    parser.add_argument("--steps_per_epoch", type=int, default=None, help="Number of steps per epoch")
-    parser.add_argument("--evaluation_steps", type=int, default=None, help="Number of steps for evaluation")
-    parser.add_argument("--stats_steps", type=int, default=50, help="Number of steps for scans")
-    parser.add_argument("--print_interval", type=int, default=50, help="COE print log interval")
-    parser.add_argument("--ma_window_size", type=int, default=20, help="Number of steps for averaging print")
-    parser.add_argument("--save_interval", action="store_true", default=None, help="Save interval compressed files each X epoch as .pompom files")
-    parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
-    parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
-    parser.add_argument("--grads_acc_steps", type=int, default=4, help="Number of gradient accumulation steps (default: 4)")
-    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
-    parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
-    parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
-    parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")
-    parser.add_argument("--gradients_checkpoint", action="store_true", default=False, help="Use gradient checkpointing")
+    parser.add_argument('--steps_per_epoch', type=int, default=None, help='Number of steps per epoch')
+    parser.add_argument('--evaluation_steps', type=int, default=None, help='Number of steps for evaluation')
+    parser.add_argument('--stats_steps', type=int, default=50, help='Number of steps for scans')
+    parser.add_argument('--print_interval', type=int, default=50, help='COE print log interval')
+    parser.add_argument('--ma_window_size', type=int, default=20, help='Number of steps for averaging print')
+    parser.add_argument('--save_interval', action='store_true', default=None, help='Save interval compressed files each X epoch as .pompom files')
+    parser.add_argument('--reset_train_data', action='store_true', default=False, help='Reset training dataset between epochs')
+    parser.add_argument('--reset_eval_data', action='store_true', default=False, help='Reset evaluation dataset between epochs')
+    parser.add_argument('--grads_acc_steps', type=int, default=4, help='Number of gradient accumulation steps (default: 4)')
+    parser.add_argument('--no_mixed_precision', action='store_false', default=True, dest='mixed_precision', help='Not using Mixed Precision')
+    parser.add_argument('--lr_warmup_epochs', type=int, default=1, help='Learning Rate used in the Learning Rate Warmup stage (default: 1)')
+    parser.add_argument('--lr_warmup_steps_per_epoch', type=int, default=500, help='Number of steps per epoch used in the Learning Rate Warmup stage')
+    parser.add_argument('--fp16_weights', action='store_true', default=False, help='Use FP16 weight (can reduce VRAM usage)')
+    parser.add_argument('--gradients_checkpoint', action='store_true', default=False, help='Use gradient checkpointing')
 
     # Model Training Setting
-    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train the model (default: 100)")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and evaluation (default: 8)")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
-    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
-    parser.add_argument("--ckpt", type=str, default="yolox_s.pth", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
-    parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
-    parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
-    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs to train the model (default: 100)')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training and evaluation (default: 8)')
+    parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate for the optimizer (default: 1e-5)')
+    parser.add_argument('--workers', type=int, default=4, help='Number of worker processes for data loading (default: 4)')
+    parser.add_argument('--ckpt', type=str, default='yolox_s.pth', help='Path to load the model checkpoints (e.g. .pth, .pompom)')
+    parser.add_argument('--output_dir', type=str, default='outputs', help='Output directory for saving results and checkpoints (default: outputs)')
+    parser.add_argument('--train_from_scratch', action='store_true', help='Train the model from scratch')
+    parser.add_argument('--multi_gpu', action='store_true', help='Use Multi-GPU Distributed Compression')
 
     # Quantization Config
-    parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")
-    parser.add_argument("--activations_num_bits", type=int, default=8, help="How many bits to use for the Activation for Quantization")
+    parser.add_argument('--weights_num_bits', type=int, default=8, help='How many bits to use for the Weights for Quantization')
+    parser.add_argument('--activations_num_bits', type=int, default=8, help='How many bits to use for the Activation for Quantization')
 
     args = parser.parse_args()
     main(args)

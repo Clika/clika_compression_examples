@@ -1,13 +1,22 @@
 # IMDN Compressing Example
-<ins>CLIKA SDK</ins> example to compress `IMDN` model on `DIV2K` dataset
+<!--TOC-->
 
+- [Requirements](#requirements)
+- [Prepare Dataset](#prepare-dataset)
+- [Run Example](#run-example)
+- [References](#references)
 
-# Requirements
+<!--TOC-->
+
+_CLIKA SDK_ example to compress `IMDN` model on `DIV2K` dataset
+
+## Requirements
 
 - Python >= 3.8
-- CLIKA SDK (https://docs.clika.io/docs/installation)
+- CLIKA SDK (<https://docs.clika.io/docs/installation>)
 - Clone IMDN project & Install dependencies
-```
+
+```shell
 # pwd: super_resolution/imdn
 git clone https://github.com/Zheng222/IMDN.git
 cd IMDN
@@ -23,19 +32,18 @@ IMDN/utils.py
 pip install -r requirements.txt
 ```
 
-
-# Prepare Dataset
+## Prepare Dataset
 
 To download and prepare the dataset simply run the following command:
 
-```
-# pwd: super_resulution/IMDN
+```shell
+# pwd: super_resolution/IMDN
 sh prepare_div2k_dataset.sh
 ```
 
 The dataset directory tree should look like the following:
 
-```
+```text
 dataset
 ├── div2k
 │   └── DIV2K_decoded
@@ -49,11 +57,13 @@ dataset
     └── sharp_bicubic
 ```
 
+## Run Example
 
-```
+```shell
 # pwd: super_resolution/imdn
 python3 imdn_main.py
 ```
 
-# References
-https://github.com/Zheng222/IMDN
+## References
+
+<https://github.com/Zheng222/IMDN>

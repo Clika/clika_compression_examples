@@ -1,17 +1,28 @@
 # EfficientNet Compressing Example
+<!--TOC-->
 
-<ins>CLIKA SDK</ins> example to compress `EfficientNet` model on `ImageNet` dataset.
+- [Requirements](#requirements)
+- [Prepare Dataset](#prepare-dataset)
+  - [Option 1 - _ImageNet_ _(1000 classes)_](#option-1---imagenet-1000-classes)
+  - [Option 2 - _ImageNette_ _(10 classes)_](#option-2---imagenette-10-classes)
+- [Run Example](#run-example)
+- [References](#references)
+
+<!--TOC-->
+
+_CLIKA SDK_ example to compress `EfficientNet` model on `ImageNet` dataset.
 
 This examples requires "[vision](https://github.com/pytorch/vision)" repository by `PyTorch` to perform dataset
 related operation and to add weight decay in order to conform with the state-of-the-art training protocol for EfficientNet:
 
-# Requirements
+## Requirements
 
 - Python >= 3.8
-- CLIKA SDK (https://docs.clika.io/docs/installation)
+- CLIKA SDK (<https://docs.clika.io/docs/installation>)
 - `pip install -r image_classification/efficientnet/requirements.txt`
 - Download dependencies from pytorch/vision
-    ```commandline
+
+    ```shell
     # pwd: image_classification/efficientnet
     mkdir vision
     cd vision
@@ -20,7 +31,7 @@ related operation and to add weight decay in order to conform with the state-of-
     cd ..
     ```
 
-# Prepare Dataset
+## Prepare Dataset
 
 Two dataset options are available.
 
@@ -39,7 +50,7 @@ Two dataset options are available.
 
 3. The final directory tree should look as following:
 
-    ```
+    ```text
     image_classification/efficientnet
     ├── ILSVRC/
     │   ├── Annotations/
@@ -47,7 +58,7 @@ Two dataset options are available.
     │   ├── Data/
     │   │   ├── CLS-LOC/
     │   │   │   ├── train/
-    │   │   │   │   ├── n01440764/ 
+    │   │   │   │   ├── n01440764/
     ...
     │   │   │   ├── test/
     ...
@@ -58,31 +69,34 @@ Two dataset options are available.
 ### Option 2 - _ImageNette_ _(10 classes)_
 
 1. Run the following command line
-    ```
-    # pwd: image_classification/efficientnet 
+
+    ```shell
+    # pwd: image_classification/efficientnet
     sh prepare_imagenette_dataset.sh
     ```
+
 2. The final directory tree should look as following:
-    ```
+
+    ```text
     FOR ImageNette:
-    
+
     image_classification/efficientnet
     ├── imagenette2-160/
     │   ├── train/
-    │   │   ├── n01440764/ 
+    │   │   ├── n01440764/
     │   ├── test/
     ...
     │   ├── val/
     ...
     ```
 
-# Run Examples
+## Run Example
 
-```
+```shell
 # pwd: image_classification/efficientnet
 python3 efficientnet_main.py
 ```
 
-# References
+## References
 
-https://github.com/pytorch/vision/tree/main/references/classification
+<https://github.com/pytorch/vision/tree/main/references/classification>

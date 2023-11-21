@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 import sys
 import warnings
 from collections import namedtuple
@@ -7,14 +8,18 @@ from functools import partial
 from pathlib import Path
 from typing import Union, Dict, Callable
 
+import numpy as np
 import torch
 import torchmetrics
 import torchvision
-from clika_compression import PyTorchCompressionEngine, QATQuantizationSettings, DeploymentSettings_TensorRT_ONNX, \
-    DeploymentSettings_TFLite, DeploymentSettings_ONNXRuntime_ONNX
-from clika_compression.settings import (
-    generate_default_settings, ModelCompileSettings
+from clika_compression import (
+    PyTorchCompressionEngine,
+    QATQuantizationSettings,
+    DeploymentSettings_TensorRT_ONNX,
+    DeploymentSettings_TFLite,
+    DeploymentSettings_ONNXRuntime_ONNX,
 )
+from clika_compression.settings import generate_default_settings, ModelCompileSettings
 from torch.optim import SGD
 from torch.utils.data.dataloader import default_collate
 
@@ -24,21 +29,34 @@ from train import load_data
 import transforms
 import utils
 
+RANDOM_SEED = 0
+torch.manual_seed(RANDOM_SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(RANDOM_SEED)
+random.seed(RANDOM_SEED)
+
 NUM_CLASSES = 1000  # imagenet 1k
 MODEL_SIZE: str = "small"
-MODEL_DICT = {"small": ("efficientnet_v2_s", 300, 384, 384, "IMAGENET1K_V1"),
-              "medium": ("efficientnet_v2_m", 384, 480, 480, "IMAGENET1K_V1")}
-MODEL_NAME, TRAIN_CROP_SIZE, VAL_CROP_SIZE, VAL_RESIZE_SIZE, WEIGHT_NAME = MODEL_DICT[MODEL_SIZE]
+MODEL_DICT = {
+    "small": ("efficientnet_v2_s", 300, 384, 384, "IMAGENET1K_V1"),
+    "medium": ("efficientnet_v2_m", 384, 480, 480, "IMAGENET1K_V1"),
+}
+MODEL_NAME, TRAIN_CROP_SIZE, VAL_CROP_SIZE, VAL_RESIZE_SIZE, WEIGHT_NAME = MODEL_DICT[
+    MODEL_SIZE
+]
 
 COMPDTYPE = Union[Dict[str, Union[Callable, torch.nn.Module]], None]
 
-deployment_kwargs = {'graph_author': "CLIKA",
-                     "graph_description": None,
-                     "input_shapes_for_deployment": [(None, 3, None, None)]}
+deployment_kwargs = {
+    "graph_author": "CLIKA",
+    "graph_description": None,
+    "input_shapes_for_deployment": [(None, 3, None, None)],
+}
 DEPLOYMENT_DICT = {
     "trt": DeploymentSettings_TensorRT_ONNX(**deployment_kwargs),
     "ort": DeploymentSettings_ONNXRuntime_ONNX(**deployment_kwargs),
-    "tflite": DeploymentSettings_TFLite(**deployment_kwargs)
+    "tflite": DeploymentSettings_TFLite(**deployment_kwargs),
 }
 
 
@@ -66,7 +84,6 @@ def batch_accuracy(outputs, targets, topk=(1,)):
 
 
 class MultiClassAccuracy(torchmetrics.classification.accuracy.MulticlassAccuracy):
-
     def update(self, preds: torch.Tensor, target: torch.Tensor) -> None:
         return super().update(preds, target)
 
@@ -109,12 +126,15 @@ def get_loader(config, train=True):
     if train is True:
         dataset, _, sampler, _ = load_data(train_dir, val_dir, opt)
 
-        mixup_transforms = [transforms.RandomMixup(NUM_CLASSES, p=1.0, alpha=0.2),
-                            transforms.RandomCutmix(NUM_CLASSES, p=1.0, alpha=1.0)]
+        mixup_transforms = [
+            transforms.RandomMixup(NUM_CLASSES, p=1.0, alpha=0.2),
+            transforms.RandomCutmix(NUM_CLASSES, p=1.0, alpha=1.0),
+        ]
         mixupcutmix = torchvision.transforms.RandomChoice(mixup_transforms)
 
         def collate_fn(batch):
             return mixupcutmix(*default_collate(batch))
+
     else:
         _, dataset, _, sampler = load_data(train_dir, val_dir, opt)
 
@@ -133,13 +153,13 @@ def get_loader(config, train=True):
 
 
 def resume_compression(
-        config: argparse.Namespace,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
     engine = PyTorchCompressionEngine()
 
@@ -156,7 +176,7 @@ def resume_compression(
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
         settings=None,
-        multi_gpu=config.multi_gpu
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -169,21 +189,21 @@ def resume_compression(
 
 
 def run_compression(
-        config: argparse.Namespace,
-        model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        get_train_loader: Callable,
-        get_eval_loader: Callable,
-        train_losses: COMPDTYPE,
-        train_metrics: COMPDTYPE,
-        eval_losses: COMPDTYPE = None,
-        eval_metrics: COMPDTYPE = None
+    config: argparse.Namespace,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    get_train_loader: Callable,
+    get_eval_loader: Callable,
+    train_losses: COMPDTYPE,
+    train_metrics: COMPDTYPE,
+    eval_losses: COMPDTYPE = None,
+    eval_metrics: COMPDTYPE = None,
 ):
-    global DEPLOYMENT_DICT
+    global DEPLOYMENT_DICT, RANDOM_SEED
 
     engine = PyTorchCompressionEngine()
     settings = generate_default_settings()
-
+    # fmt: off
     settings.deployment_settings = DEPLOYMENT_DICT[config.target_framework]
     settings.global_quantization_settings = QATQuantizationSettings()
     settings.global_quantization_settings.weights_num_bits = config.weights_num_bits
@@ -205,13 +225,14 @@ def run_compression(
     settings.training_settings.lr_warmup_steps_per_epoch = config.lr_warmup_steps_per_epoch
     settings.training_settings.use_fp16_weights = config.fp16_weights
     settings.training_settings.use_gradients_checkpoint = config.gradients_checkpoint
-
+    settings.training_settings.random_seed = RANDOM_SEED
+    # fmt: on
     mcs = ModelCompileSettings(
         optimizer=optimizer,
         training_losses=train_losses,
         training_metrics=train_metrics,
         evaluation_losses=eval_losses,
-        evaluation_metrics=eval_metrics
+        evaluation_metrics=eval_metrics,
     )
     final = engine.optimize(
         output_path=config.output_dir,
@@ -221,7 +242,7 @@ def run_compression(
         init_training_dataset_fn=get_train_loader,
         init_evaluation_dataset_fn=get_eval_loader,
         is_training_from_scratch=config.train_from_scratch,
-        multi_gpu=config.multi_gpu
+        multi_gpu=config.multi_gpu,
     )
     engine.deploy(
         clika_state_path=final,
@@ -236,7 +257,9 @@ def run_compression(
 def main(config):
     global BASE_DIR, NUM_CLASSES, MODEL_NAME, TRAIN_CROP_SIZE, VAL_CROP_SIZE, VAL_RESIZE_SIZE, WEIGHT_NAME
 
-    print("\n".join(f"{k}={v}" for k, v in vars(config).items()))  # pretty print argparse
+    print(
+        "\n".join(f"{k}={v}" for k, v in vars(config).items())
+    )  # pretty print argparse
 
     if config.data is None:
         imagenet_path = BASE_DIR / "ILSVRC/Data/CLS-LOC"
@@ -248,11 +271,19 @@ def main(config):
             config.data = str(imagenette_path)
             print(f"setting {config.data} as default dataset")
         else:
-            raise FileNotFoundError("Could not set default dataset path. Please confirm data folders exist.")
+            raise FileNotFoundError(
+                "Could not set default dataset path. Please confirm data folders exist."
+            )
     else:
-        config.data = config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+        config.data = (
+            config.data if os.path.isabs(config.data) else str(BASE_DIR / config.data)
+        )
 
-    config.output_dir = config.output_dir if os.path.isabs(config.output_dir) else str(BASE_DIR / config.output_dir)
+    config.output_dir = (
+        config.output_dir
+        if os.path.isabs(config.output_dir)
+        else str(BASE_DIR / config.output_dir)
+    )
 
     """
     Define Model
@@ -261,15 +292,23 @@ def main(config):
     resume_compression_flag = False
 
     if config.train_from_scratch is True:
-        model = torchvision.models.get_model(MODEL_NAME, weights=None, num_classes=NUM_CLASSES)
+        model = torchvision.models.get_model(
+            MODEL_NAME, weights=None, num_classes=NUM_CLASSES
+        )
     else:
-        model = torchvision.models.get_model(MODEL_NAME, weights=WEIGHT_NAME, num_classes=NUM_CLASSES)
+        model = torchvision.models.get_model(
+            MODEL_NAME, weights=WEIGHT_NAME, num_classes=NUM_CLASSES
+        )
 
     if (config.train_from_scratch is False) and (config.ckpt is not None):
-        config.ckpt = config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        config.ckpt = (
+            config.ckpt if os.path.isabs(config.ckpt) else str(BASE_DIR / config.ckpt)
+        )
 
         if config.ckpt.rsplit(".", 1)[-1] == "pompom":
-            warnings.warn(".pompom file provided, resuming compression (argparse attributes ignored)")
+            warnings.warn(
+                ".pompom file provided, resuming compression (argparse attributes ignored)"
+            )
             resume_compression_flag = True
         else:
             print(f"loading ckpt from {config.ckpt}")
@@ -291,7 +330,7 @@ def main(config):
         model,
         weight_decay=0.00002,
         norm_weight_decay=None,
-        custom_keys_weight_decay=None
+        custom_keys_weight_decay=None,
     )
     optimizer = SGD(parameters, lr=config.lr, momentum=0.9, weight_decay=0.00002)
 
@@ -306,14 +345,18 @@ def main(config):
     Define Metric Wrapper
     ====================================================================================================================
     """
-    eval_metrics = {"top1": MultiClassAccuracy(num_classes=NUM_CLASSES, top_k=1),
-                    "top5": MultiClassAccuracy(num_classes=NUM_CLASSES, top_k=5)}
-    train_metrics = {"batch_acc_top1": partial(batch_accuracy, topk=(1,)),
-                     "batch_acc_top5": partial(batch_accuracy, topk=(5,))}
+    eval_metrics = {
+        "top1": MultiClassAccuracy(num_classes=NUM_CLASSES, top_k=1),
+        "top5": MultiClassAccuracy(num_classes=NUM_CLASSES, top_k=5),
+    }
+    train_metrics = {
+        "batch_acc_top1": partial(batch_accuracy, topk=(1,)),
+        "batch_acc_top5": partial(batch_accuracy, topk=(5,)),
+    }
 
     """
     RUN Compression
-    ====================================================================================================================    
+    ====================================================================================================================
     """
     if resume_compression_flag is True:
         resume_compression(
@@ -323,7 +366,7 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
     else:
         run_compression(
@@ -335,44 +378,45 @@ def main(config):
             train_losses=train_losses,
             train_metrics=train_metrics,
             eval_losses=eval_losses,
-            eval_metrics=eval_metrics
+            eval_metrics=eval_metrics,
         )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CLIKA EfficientNet Example")
-    parser.add_argument("--target_framework", type=str, default="trt", choices=["tflite", "ort", "trt"], help="choose the target framework TensorFlow Lite or TensorRT")
-    parser.add_argument("--data", type=str, default=None, help="Dataset directory")
+    # fmt: off
+    parser = argparse.ArgumentParser(description='CLIKA EfficientNet Example')
+    parser.add_argument('--target_framework', type=str, default='trt', choices=['tflite', 'ort', 'trt'], help='choose the target framework TensorFlow Lite or TensorRT')
+    parser.add_argument('--data', type=str, default=None, help='Dataset directory')
 
     # CLIKA Engine Training Settings
-    parser.add_argument("--steps_per_epoch", type=int, default=None, help="Number of steps per epoch")
-    parser.add_argument("--evaluation_steps", type=int, default=None, help="Number of steps for evaluation")
-    parser.add_argument("--stats_steps", type=int, default=50, help="Number of steps for scans")
-    parser.add_argument("--print_interval", type=int, default=50, help="COE print log interval")
-    parser.add_argument("--ma_window_size", type=int, default=20, help="Number of steps for averaging print")
-    parser.add_argument("--save_interval", action="store_true", default=None, help="Save interval compressed files each X epoch as .pompom files")
-    parser.add_argument("--reset_train_data", action="store_true", default=False, help="Reset training dataset between epochs")
-    parser.add_argument("--reset_eval_data", action="store_true", default=False, help="Reset evaluation dataset between epochs")
-    parser.add_argument("--grads_acc_steps", type=int, default=1, help="Number of gradient accumulation steps (default: 1)")
-    parser.add_argument("--no_mixed_precision", action="store_false", default=True, dest="mixed_precision", help="Not using Mixed Precision")
-    parser.add_argument("--lr_warmup_epochs", type=int, default=1, help="Learning Rate used in the Learning Rate Warmup stage (default: 1)")
-    parser.add_argument("--lr_warmup_steps_per_epoch", type=int, default=500, help="Number of steps per epoch used in the Learning Rate Warmup stage")
-    parser.add_argument("--fp16_weights", action="store_true", default=False, help="Use FP16 weight (can reduce VRAM usage)")
-    parser.add_argument("--gradients_checkpoint", action="store_true", default=False, help="Use gradient checkpointing")
+    parser.add_argument('--steps_per_epoch', type=int, default=None, help='Number of steps per epoch')
+    parser.add_argument('--evaluation_steps', type=int, default=None, help='Number of steps for evaluation')
+    parser.add_argument('--stats_steps', type=int, default=50, help='Number of steps for scans')
+    parser.add_argument('--print_interval', type=int, default=50, help='COE print log interval')
+    parser.add_argument('--ma_window_size', type=int, default=20, help='Number of steps for averaging print')
+    parser.add_argument('--save_interval', action='store_true', default=None, help='Save interval compressed files each X epoch as .pompom files')
+    parser.add_argument('--reset_train_data', action='store_true', default=False, help='Reset training dataset between epochs')
+    parser.add_argument('--reset_eval_data', action='store_true', default=False, help='Reset evaluation dataset between epochs')
+    parser.add_argument('--grads_acc_steps', type=int, default=1, help='Number of gradient accumulation steps (default: 1)')
+    parser.add_argument('--no_mixed_precision', action='store_false', default=True, dest='mixed_precision', help='Not using Mixed Precision')
+    parser.add_argument('--lr_warmup_epochs', type=int, default=1, help='Learning Rate used in the Learning Rate Warmup stage (default: 1)')
+    parser.add_argument('--lr_warmup_steps_per_epoch', type=int, default=500, help='Number of steps per epoch used in the Learning Rate Warmup stage')
+    parser.add_argument('--fp16_weights', action='store_true', default=False, help='Use FP16 weight (can reduce VRAM usage)')
+    parser.add_argument('--gradients_checkpoint', action='store_true', default=False, help='Use gradient checkpointing')
 
     # Model Training Setting
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs to train the model (default: 10)")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training and evaluation (default: 8)")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
-    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
-    parser.add_argument("--ckpt", type=str, default=None, help="Path to load the model checkpoints (e.g. .pth, .pompom)")
-    parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory for saving results and checkpoints (default: outputs)")
-    parser.add_argument("--train_from_scratch", action="store_true", help="Train the model from scratch")
-    parser.add_argument("--multi_gpu", action="store_true", help="Use Multi-GPU Distributed Compression")
+    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train the model (default: 10)')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training and evaluation (default: 8)')
+    parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate for the optimizer (default: 1e-5)')
+    parser.add_argument('--workers', type=int, default=4, help='Number of worker processes for data loading (default: 4)')
+    parser.add_argument('--ckpt', type=str, default=None, help='Path to load the model checkpoints (e.g. .pth, .pompom)')
+    parser.add_argument('--output_dir', type=str, default='outputs', help='Output directory for saving results and checkpoints (default: outputs)')
+    parser.add_argument('--train_from_scratch', action='store_true', help='Train the model from scratch')
+    parser.add_argument('--multi_gpu', action='store_true', help='Use Multi-GPU Distributed Compression')
 
     # Quantization Config
-    parser.add_argument("--weights_num_bits", type=int, default=8, help="How many bits to use for the Weights for Quantization")
-    parser.add_argument("--activations_num_bits", type=int, default=8, help="How many bits to use for the Activation for Quantization")
+    parser.add_argument('--weights_num_bits', type=int, default=8, help='How many bits to use for the Weights for Quantization')
+    parser.add_argument('--activations_num_bits', type=int, default=8, help='How many bits to use for the Activation for Quantization')
 
     args = parser.parse_args()
 

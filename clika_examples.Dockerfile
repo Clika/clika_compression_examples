@@ -9,12 +9,12 @@ ARG CLIKA_LICENSE_FILE_PATH="${CLIKA_LICENSE_FILE_DIRECTORY}/.cc_license"
 RUN if [ -z ${CC_LICENSE_KEY} ]; then echo "CC_LICENSE_KEY is empty! please provide a CC_LICENSE_KEY"; exit 1; fi
 
 
-# install dependencies for OpenCV which is required for some of the exmaples
+# install dependencies for OpenCV which is required for some of the examples
 # it is NOT a requirement for `clika-compression` itself
 RUN apt update && DEBIAN_FRONTEND=noninter apt  install ffmpeg libsm6 libxext6  -y
 RUN apt install -y git # install git to be able to clone required repositories
 
-# creates a file containing the license key so it could be avaliable to the `clika-comression` package
+# creates a file containing the license key so it could be available to the `clika-compression` package
 # replaces the interactive `clika-init-license` command (see docs.clika.io installation notes)
 RUN mkdir $CLIKA_LICENSE_FILE_DIRECTORY
 RUN echo ${CC_LICENSE_KEY} >> $CLIKA_LICENSE_FILE_PATH

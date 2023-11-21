@@ -1,15 +1,12 @@
 import argparse
 import hashlib
-import itertools
 import sys
 import zipfile
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import requests
 from tqdm import tqdm
-import cv2
 
 
 def _calculate_md5(file_dir: str, chunk_size: int = 1024 * 1024) -> str:
@@ -52,8 +49,8 @@ def download_url(
 
     # download the file
     response = requests.get(url, stream=True)
-    total_size_in_bytes = int(response.headers.get('content-length', 0))
-    progress_bar = tqdm(total=total_size_in_bytes, unit='iB', unit_scale=True)
+    total_size_in_bytes = int(response.headers.get("content-length", 0))
+    progress_bar = tqdm(total=total_size_in_bytes, unit="iB", unit_scale=True)
 
     _tmp_file = save_dir.joinpath(f"{filename}.temp")
     with _tmp_file.open("wb") as file:
@@ -77,22 +74,22 @@ def main(data_dir: str):
         {
             "file_name": "val2017.zip",
             "url": "http://images.cocodataset.org/zips/val2017.zip",
-            "md5": "442b8da7639aecaf257c1dceb8ba8c80"
-         },
+            "md5": "442b8da7639aecaf257c1dceb8ba8c80",
+        },
         {
             "file_name": "train2017.zip",
             "url": "http://images.cocodataset.org/zips/train2017.zip",
-            "md5": "cced6f7f71b7629ddf16f17bbcfab6b2"
+            "md5": "cced6f7f71b7629ddf16f17bbcfab6b2",
         },
         {
             "file_name": "test2017.zip",
             "url": "http://images.cocodataset.org/zips/test2017.zip",
-            "md5": "77ad2c53ac5d0aea611d422c0938fb35"
+            "md5": "77ad2c53ac5d0aea611d422c0938fb35",
         },
         {
             "file_name": "annotations_trainval2017.zip",
             "url": "http://images.cocodataset.org/annotations/annotations_trainval2017.zip",
-            "md5": "f4bbac642086de4f52a3fdda2de5fa2c"
+            "md5": "f4bbac642086de4f52a3fdda2de5fa2c",
         },
     ]
 
@@ -102,17 +99,21 @@ def main(data_dir: str):
             url=_data["url"],
             save_dir=str(_data_dir.parent),
             filename=_data_dir.name,
-            md5=_data["md5"]
+            md5=_data["md5"],
         )
 
         with zipfile.ZipFile(str(_data_dir), "r") as zip_ref:
             zip_ref.extractall(str(_data_dir.parent))
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='prepare COCO dataset ')
-    parser.add_argument('--data_dir', type=str, default=None,
-                        help='path to data directory to save the dataset to ')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="prepare COCO dataset ")
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default=None,
+        help="path to data directory to save the dataset to ",
+    )
 
     args = parser.parse_args()
 

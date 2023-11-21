@@ -1,4 +1,2 @@
-torch==2.0.1
 torchmetrics==1.0.1
-torchvision==0.15.2
 typing_extensions==4.6.3

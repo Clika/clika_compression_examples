@@ -1,41 +1,57 @@
-# Prerequisites
+# CLIKA SDK
+<!--TOC-->
 
-- Install CLIKA SDK (https://docs.clika.io/docs/installation)
+- [Prerequisites](#prerequisites)
+- [Datasets](#datasets)
+- [Repository Structure](#repository-structure)
+- [CLIKA Compression Examples Table](#clika-compression-examples-table)
+- [Run Examples](#run-examples)
+  - [CLIKA Engine Training Settings](#clika-engine-training-settings)
+  - [Model Training Setting](#model-training-setting)
+  - [Quantization Configuration](#quantization-configuration)
+- [Docker Image](#docker-image)
+  - [Usage](#usage)
 
-# Datasets
+<!--TOC-->
 
-All examples have a `README.md` file with instructions on how to prepare your environment and dataset and run the example
+## Prerequisites
 
-Datasets will be downloaded to `<task-name>/<model-name>/<dataset-name>`
+- Install CLIKA SDK (<https://docs.clika.io/docs/installation>)
 
-# Repository Structure
+## Datasets
+
+All examples have a `README.md` file with instructions on how to prepare your environment and dataset and run the example.
+
+Datasets will be downloaded to `<task-name>/<model-name>/<dataset-name>`.
+
+## Repository Structure
 
 CLIKA Compression Examples
 
-```
+```text
 clika_compression_examples/
 ├── <task-1>/ # for example image_classification
 │   ├── <model-1>/ # for example image_classification/mobilenet
-│   │   ├── <model-1>_main.py # the file that contine the usage example
-│   │   ├── prepare_<dataset-name>_dataset.sh # shell scrip used to prerare the dataset (see specific example README.md)
-│   │   ├── <dataset-name>/ # folder containing the dataset (needs to be downloaded as insructed in the specific README.md)
-│   │   ├── example_utils/ # small repository with neccessary utilities for the example
+│   │   ├── <model-1>_main.py # the file that continue the usage example
+│   │   ├── prepare_<dataset-name>_dataset.sh # shell scrip used to prepare the dataset (see specific example README.md)
+│   │   ├── <dataset-name>/ # folder containing the dataset (needs to be downloaded as instructed in the specific README.md)
+│   │   ├── example_utils/ # small repository with necessary utilities for the example
 │   │   ├── requirements.txt # python requirements for the specific example
-│   │   ├── README.md # instruction on how to setup enviroment prepare dataset and run the example
+│   │   ├── README.md # instruction on how to setup environment prepare dataset and run the example
 │   ├── <model-2>/
 ...
 ├── <task-2>/
 ...
 ```
 
-# CLIKA Compression Examples Table
+## CLIKA Compression Examples Table
 
 - Example Script - link to example python file
 - Model - The model's name
 - Task - The model's objective
 - Dataset - The default dataset used in the example
 - Domain - The field of application
-    - CV - Computer Vision
+  - CV - Computer Vision
 
 | Model                                                  | Task                                         | Example Dataset       | Domain |
 |:-------------------------------------------------------|:---------------------------------------------|:----------------------|:-------|
@@ -50,7 +66,7 @@ clika_compression_examples/
 | [YOLOX](object_detection%2Fyolox)                      | [object_detection](object_detection)         | COCO                  | CV     |
 | [IMDN](super_resolution%2Fimdn)                        | [super_resolution](super_resolution)         | DIV2K and REDS4       | CV     |
 
-# Run Examples
+## Run Examples
 
 See `README.md` inside each model folder
 all examples has the same command line argument which are:
@@ -86,7 +102,7 @@ all examples has the same command line argument which are:
 - **multi_gpu** - Use Multi-GPU Distributed Compression, similar to [PyTorch's DistributedDataParallel](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html)
   paradigm, which copies the model to each GPU and splits the dataset between them.
 
-### Quantization Config
+### Quantization Configuration
 
 - **weights_num_bits** - How many bits to use for the Weights for Quantization
 - **activations_num_bits** - How many bits to use for the Activation for Quantization
@@ -100,23 +116,23 @@ It is based on the official [PyTorch `.Dockerfile`](https://hub.docker.com/layer
 
 Requirements:
 
-- [Docker](https://www.docker.com/) > 19.03
+- [Docker](https://www.docker.com/) >= 24.0.6
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/overview.html) (`clika-compression` requires CUDA)
 
 To build the Docker Image
 
-```commandline
+```shell
 # pwd: clika_compression_examples/
-export CC_LICENSE_KEY=<your-license-key> 
+export CC_LICENSE_KEY=<your-license-key>
 docker build --build-arg CC_LICENSE_KEY=$CC_LICENSE_KEY --tag "clika_compression:latest" -f clika_examples.Dockerfile .
 ```
 
 To run a container and the [MNIST](image_classification%2Fmnist) example:
 
-```commandline
+```shell
 docker run -it --shm-size 8G --gpus all  --entrypoint /bin/bash -v $PWD:/workspace:rw clika_compression
-# folow the instructions on the specific `README.`md file for the example
-# for MNIST simply install `requirements.txt` and run example  
-pip install -r image_classification/mnist/requirements.txt 
+# follow the instructions on the specific `README.`md file for the example
+# for MNIST simply install `requirements.txt` and run example
+pip install -r image_classification/mnist/requirements.txt
 python image_classification/mnist/mnist_main.py
 ```

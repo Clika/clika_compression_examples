@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-devel
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-devel
 ARG CC_LICENSE_KEY
 ENV CC_LICENSE_KEY=${CC_LICENSE_KEY}
 

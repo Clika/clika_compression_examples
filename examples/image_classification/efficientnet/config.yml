@@ -1,0 +1,108 @@
+# ================= CLIKA ACE hyperparameter configuration file ================= #
+# for more information please refer to https://docs.clika.io
+
+
+deployment_settings:
+  # Choose the target framework ["tflite", "ov", "ort", "trt", "qnn"]
+  target_framework: trt
+
+  # Set to True if you're planning to run the model on a CPU that supports AVX512-VNNI or if you're planning to run on ARM CPU.
+  #   This setting is only relevant for "ov" (OpenVINO), "ort" (ONNXRuntime)
+  # weights_utilize_full_int_range: false
+
+
+distributed_training_settings:
+  # enable multi gpu training
+  multi_gpu: false
+
+  # enable FSDP if true else use DDP
+  use_sharding: false
+
+
+global_quantization_settings:
+  method: qat
+  weights_num_bits: 8
+  activations_num_bits: 8
+
+  # whether to skip quantization for the tail of the model (keep it null if unsure)
+  skip_tail_quantization: null
+
+  # whether to automatically skip quantization for sensitive layers (keep it true if unsure)
+  #      The threshold to decide automatically whether to skip quantization for layers that are too sensitive.
+  #      This will only be applied if 'automatic_skip_quantization' is True.
+  #      Some tips:
+  #          * For small models like MobileNet - 5000 is a good value
+  #          * For big models 10000 is a good value
+  #      The quantization sensitivity is measured using L2(QuantizedTensor-FloatTensor), the higher it is the more "destructive" the quantization is.
+  #      This also implies that it can take longer for a Model to recover it's performance if it is overly sensitive.
+  automatic_skip_quantization: true
+  quantization_sensitivity_threshold: null
+
+
+training_settings:
+  num_epochs: 100
+
+  # Gradient accumulation steps
+  grads_acc_steps: 1
+
+  # Number of steps to take per epoch
+  steps_per_epoch: 1000
+  evaluation_steps: null
+
+  # Number of warmup epochs/steps to take
+  lr_warmup_epochs: 1
+  lr_warmup_steps_per_epoch: 500
+
+  # AMP dtype: [float16, bfloat16, null]
+  amp_dtype: null
+
+  # Specify weight dtype of the model: [float16, bfloat16, null]
+  # if null use default (float32)
+  weights_dtype: null
+
+  # Number of steps for initial calibration
+  stats_steps: 20
+
+  activations_offloading: false
+  params_offloading: false
+
+  # Enable gradient clipping, use null or comment to disable
+  clip_grad_norm_val: null
+  clip_grad_norm_type: 2.0
+
+  # .pompom files save interval in epochs
+  save_interval: null
+
+  # Print log every x steps
+  print_interval: 100
+
+  # Printing moving average window size
+  print_ma_window_size: 50
+
+  # Reset train-loader/eval-loader between epochs
+  reset_train_data: false
+  reset_eval_data: true
+
+  # Skip initial evaluation before compression
+  skip_initial_eval: false
+
+  # Random seed applied on CLIKA SDK
+  random_seed: null
+
+  # Indicates CLIKA SDK that the model has untrained weight
+  is_training_from_scratch: false
+
+
+# Layer compression setting
+#layer_settings:
+#  conv:
+#    quantization_settings:
+#      weights_num_bits: 8
+#      activations_num_bits: 8
+
+
+# Uncomment to apply LoRA
+# global_lora_settings:
+#   rank: 2
+#   alpha: 1
+#   dropout_rate: 0.05

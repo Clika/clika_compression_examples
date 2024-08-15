@@ -1,10 +1,10 @@
-# YOLOv7 Compressing Example
+# YOLOv7 Compression Example
 <!--TOC-->
 
 - [Requirements](#requirements)
-- [Prepare Dataset](#prepare-dataset)
-- [Run Example](#run-example)
-- [Deploy `.pompom` file](#deploy-pompom-file)
+- [Pre-Requisite](#pre-requisite)
+- [Run Compression](#run-compression)
+- [Deploy Compressed checkpoint](#deploy-compressed-checkpoint)
 - [References](#references)
 
 <!--TOC-->
@@ -13,82 +13,55 @@
 
 ## Requirements
 
-- Python >= 3.8
+- 3.11 >= Python >= 3.8
 - CLIKA SDK (<https://docs.clika.io/docs/installation>)
-- Clone YOLOv7 project & Install dependencies
+- `pip install -r ./requirements.txt`
+
+## Pre-Requisite
 
 ```shell
-# pwd: object_detection/yolov7
-git clone https://github.com/WongKinYiu/yolov7.git
-git -C yolov7 reset --hard 84932d70fb9e2932d0a70e4a1f02a1d6dd1dd6ca
-
-# install requirements
-pip install -r yolov7/requirements.txt
-pip install torchmetrics==1.3.2 pycocotools
-
-# download checkpoint
-wget https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7.pt
+sh prepare_code.sh
+sh prepare_dataset.sh
 ```
 
-## Prepare Dataset
-
-To download and prepare the dataset simply run the following command:
-
-```shell
-# pwd: object_detection/yolov7
-sh ./yolov7/scripts/get_coco.sh
-```
-
-The dataset directory tree should look like the following:
+If the above scripts completed successfully. You should be able to see 3 new directories under the current directory.
+(`yolov7`, `checkpoints`, `coco`)
 
 ```text
-coco
-├── annotations
-├── images
-│   ├── test2017
-│   ├── train2017
-│   └── val2017
-└── labels
-    ├── train2017
-    └── val2017
+yolov7/
+# cloned repository
+├── yolov7
+
+# trained checkpoints
+├── checkpoints/
+│   └── yolov7.pt
+
+# downloaded dataset
+└── coco
+  ├── annotations
+  ├── images
+  │   ├── test2017
+  │   ├── train2017
+  │   └── val2017
+  └── labels
+      ├── train2017
+      └── val2017
 ```
 
-OR
-
-You may download COCO dataset from [official website](https://cocodataset.org/#download) and unzip.
-
-## Run Example
+## Run Compression
 
 ```shell
-# pwd: object_detection/yolov7
-python3 yolov7_main.py --output_dir outputs
+# single gpu
+python3 yolov7_main.py
+
+# multi gpu
+torchrun --nproc-per-node={num gpus} yolov7_main.py
 ```
 
-## Deploy `.pompom` file
+## Deploy Compressed checkpoint
 
-```python
-from clika_compression.utils import get_path_to_best_clika_state_result
-from clika_compression import clika_deploy
-
-
-# (OPTIONAL) find the best performing pompom file
-best_pompom_file_path: str = get_path_to_best_clika_state_result(
-    "outputs",
-    key_name="mAP_map",
-    summary_json_group="evaluation",
-    find_lowest=False,
-)
-
-deployed_model_path: str = clika_deploy(
-    clika_state_path=best_pompom_file_path,
-    output_dir_path="outputs",
-
-    # (OPTIONAL)set this if you wish to use dynamic shapes
-    # input_shapes=[(None, 3, None, None)],
-
-    graph_author="CLIKA",
-    graph_description="",
-)
+```shell
+python3 yolov7_deloy.py {saved chkpt}
 ```
 
 ## References

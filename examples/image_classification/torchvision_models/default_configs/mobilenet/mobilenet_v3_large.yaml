@@ -1,0 +1,9 @@
+epochs: 600
+opt: rmsprop
+batch_size: 128
+lr: 0.064
+weight_decay: 0.00001
+lr_step_size: 2
+lr_gamma: 0.973
+auto_augment: imagenet
+random_erase: 0.2

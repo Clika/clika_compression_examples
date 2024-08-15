@@ -1,1 +1,0 @@
-../../common/prepare_imagenette_dataset.sh

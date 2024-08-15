@@ -1,0 +1,6 @@
+/6DRepNet/
+/sixdrepnet/
+**/*.zip
+**/*.mat
+*.jpg
+checkpoints/

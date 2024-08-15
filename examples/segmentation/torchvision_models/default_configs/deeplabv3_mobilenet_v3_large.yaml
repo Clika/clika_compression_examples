@@ -1,0 +1,6 @@
+lr: 0.02
+dataset: coco
+batch_size: 4
+aux_loss: true
+weight_decay: 0.000001
+weights_backbone: MobileNet_V3_Large_Weights.IMAGENET1K_V1

@@ -1,10 +1,10 @@
-# RetinaFace Compressing Example
+# RetinaFace Compression Example
 <!--TOC-->
 
 - [Requirements](#requirements)
-- [Prepare Dataset](#prepare-dataset)
-- [Run Example](#run-example)
-- [Deploy `.pompom` file](#deploy-pompom-file)
+- [Pre-Requisite](#pre-requisite)
+- [Run Compression](#run-compression)
+- [Deploy Compressed checkpoint](#deploy-compressed-checkpoint)
 - [References](#references)
 
 <!--TOC-->
@@ -13,88 +13,66 @@
 
 ## Requirements
 
-- Python >= 3.8
+- 3.11 >= Python >= 3.8
 - CLIKA SDK (<https://docs.clika.io/docs/installation>)
-- Clone RetinaFace project & Install dependencies
+- `pip install -r ./requirements.txt`
+
+## Pre-Requisite
 
 ```shell
-# pwd: object_detection/retinaface
-git clone https://github.com/biubug6/Pytorch_Retinaface.git
-git -C Pytorch_Retinaface reset --hard b984b4b775b2c4dced95c1eadd195a5c7d32a60b
-
-# install requirements
-pip install -r requirements.txt gdown==5.1.0
-
-# download checkpoints
-gdown -O . https://drive.google.com/drive/folders/1oZRSG0ZegbVkVwUd8wUIQx8W7yfZ_ki1 --folder
-mkdir -p weights && mv mobilenetV1X0.25_pretrain.tar weights/
+sh prepare_code.sh
+sh prepare_dataset.sh
 ```
 
-## Prepare Dataset
-
-To download and prepare the dataset simply run the following command:
-
-```shell
-# pwd: object_detection/retinaface
-sh prepare_widerface_dataset.sh
-```
-
-The dataset directory tree should look like the following:
+If the above scripts completed successfully. You should be able to see 3 new directories under the current directory.
+(`Pytorch_Retinaface`, `checkpoints`, `widerface`)
 
 ```text
-object_detection/retinaface/
-├── widerface/
-│   ├── wider_face_split/
-...
-│   │   ├──label.txt
-│   ├── WIDER_test/
-│   │   ├──label.txt
-│   │   ├──images/
-│   │   │   ├──0--Parade/
-│   │   │   │   ├──0_Parade_marchingband_1_9.jpg
-...
-│   ├── WIDER_train/
-│   │   ├──label.txt
-│   │   ├──images/
-...
-│   ├── WIDER_val/
-│   │   ├──label.txt
-│   │   ├──images/
-...
+retinaface/
+# cloned repository
+├── Pytorch_Retinaface
+
+# trained checkpoints
+├── checkpoints/
+│   ├── mobilenet0.25_Final.pth
+│   ├── mobilenetV1X0.25_pretrain.tar
+│   └── Resnet50_Final.pth
+
+# downloaded dataset
+└── widerface/
+    ├── wider_face_split/
+    ...
+    │   ├──label.txt
+    ├── WIDER_test/
+    │   ├──label.txt
+    │   ├──images/
+    │   │   ├──0--Parade/
+    │   │   │   ├──0_Parade_marchingband_1_9.jpg
+    ...
+    ├── WIDER_train/
+    │   ├──label.txt
+    │   ├──images/
+    ...
+    ├── WIDER_val/
+    │   ├──label.txt
+    │   ├──images/
+    ...
 ```
 
-## Run Example
+## Run Compression
 
 ```shell
-# pwd: object_detection/retinaface
-python3 retinaface_main.py --output_dir outputs
+# single gpu
+python3 retinaface_main.py
+
+# multi gpu
+torchrun --nproc-per-node={num gpus} retinaface_main.py
 ```
 
-## Deploy `.pompom` file
+## Deploy Compressed checkpoint
 
-```python
-from clika_compression.utils import get_path_to_best_clika_state_result
-from clika_compression import clika_deploy
-
-
-# (OPTIONAL) find the best performing pompom file
-best_pompom_file_path: str = get_path_to_best_clika_state_result(
-    "outputs",
-    key_name="mAP_map",
-    summary_json_group="evaluation",
-    find_lowest=False,
-)
-
-deployed_model_path: str = clika_deploy(
-    clika_state_path=best_pompom_file_path,
-    output_dir_path="outputs",
-
-    # (OPTIONAL)set this if you wish to use dynamic shapes
-    # input_shapes=[(None, 3, None, None)],
-
-    graph_author="CLIKA",
-    graph_description="",
-)
+```shell
+python3 retinaface_deloy.py {saved chkpt}
 ```
 
 ## References

@@ -1,348 +1,413 @@
 import argparse
-import shutil
+import os
 import sys
-import warnings
-from functools import partial
+from contextlib import nullcontext
 from pathlib import Path
-from pprint import pprint
+from typing import Any, Optional, Union
 
-import cv2
-import numpy as np
+import lightning as pl
 import torch
 import torchvision
-from clika_compression import Settings, TensorBoardCallback, clika_compress, clika_resume
-from torch.utils.data import DataLoader
-from torchmetrics import Metric
-from typing_extensions import Optional
+import yaml
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.utilities.types import EVAL_DATALOADERS, STEP_OUTPUT
+from torch import distributed as dist
+from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
+from torch.optim import Optimizer
+from torchmetrics import SumMetric
 
 BASE_DIR = Path(__file__).parent
-sys.path.insert(0, str(BASE_DIR / "6DRepNet" / "sixdrepnet"))
-import utils
-from datasets import getDataset
-from loss import GeodesicLoss
-from model import SixDRepNet
+
+from clika_ace import ClikaModule
+from example_utils.common import dist_utils as utils
+from example_utils.common.pl_callbacks import RichModelSummary, TQDMProgressBar
+from example_utils.common.pl_utils import tune_batch_size
+sys.path.insert(0, str(BASE_DIR.joinpath("6DRepNet")))
+from sixdrepnet.datasets import getDataset
+from sixdrepnet.loss import GeodesicLoss
+from sixdrepnet.model import SixDRepNet
 
 
-# Define Class/Function Wrappers
-# ==================================================================================================================== #
-def _collate_fn(batch):
-    """Parse dataloader output to satisfy CLIKA SDK input requirements.
-    (https://docs.clika.io/docs/compression-constraints/cco_input_requirements#Dataset-Dataloader)
-    """
-    images, r_label, cont_labels, name = zip(*batch)
-    if isinstance(cont_labels[0], list):
-        cont_labels = [torch.tensor(_) for _ in cont_labels]
-    return torch.stack(images), (torch.stack(r_label), torch.stack(cont_labels), name)
+class Pose300W_AFLW2000_DataModule(pl.LightningDataModule):
+    _args: argparse.Namespace
+    train_batch_size: int
+    test_batch_size: int
+    _train_loader: Optional[torch.utils.data.DataLoader]
+    _test_loader: Optional[torch.utils.data.DataLoader]
 
+    def __init__(self, args: argparse.Namespace):
+        super().__init__()
+        self._args = args
+        self.train_batch_size = self._args.batch_size
+        self.test_batch_size = self._args.batch_size
+        self._train_loader = None
+        self._test_loader = None
 
-def get_loader(data_dir: Path, batch_size: int, num_workers: int = 0, is_train: bool = True) -> DataLoader:
-    """Factory function that generates train/eval Dataloader."""
-    if is_train:
-        dataset_name = "Pose_300W_LP"
-        transform = [torchvision.transforms.RandomResizedCrop(size=224, scale=(0.8, 1))]
-        data_dir = data_dir.joinpath("300W_LP")
-    else:
-        dataset_name = "AFLW2000"
-        transform = [
-            torchvision.transforms.Resize(256),
-            torchvision.transforms.CenterCrop(224),
-        ]
-        data_dir = data_dir.joinpath("AFLW2000")
-    transform += [
-        torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-    transform = torchvision.transforms.Compose(transform)
-
-    dataset = getDataset(
-        dataset=dataset_name,
-        data_dir=str(data_dir),
-        filename_list=str(data_dir.joinpath("files.txt")),
-        transformations=transform,
-    )
-
-    data_loader = DataLoader(
-        dataset,
-        batch_size=batch_size if is_train else 1,
-        num_workers=num_workers,
-        pin_memory=False,
-        shuffle=True if is_train else False,
-        collate_fn=_collate_fn,
-    )
-    return data_loader
-
-
-class SixDRepNetWrapper(SixDRepNet):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def forward(self, x):
-        """
-        `utils.compute_rotation_matrix_from_ortho6d` inside forward graph is moved to `CriterionWrapper`
-
-        REFERENCE:
-        https://github.com/thohemp/6DRepNet/blob/0d4ccab11f49143f3e4638890d0f307f30b070f4/sixdrepnet/model.py#L37-L45
-        """
-        x = self.layer0(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.gap(x)
-        x = torch.flatten(x, 1)
-        x = self.linear_reg(x)
-        return x
-
-
-class CriterionWrapper:
-    def __init__(self):
-        self.criterion = GeodesicLoss().cuda()
-
-    def __call__(self, predictions, targets):
-        predictions = utils.compute_rotation_matrix_from_ortho6d(predictions)
-        return self.criterion(targets[0], predictions)
-
-
-class MetricWrapper(Metric):
-    """Custom Metric class that postprocess model's logit outputs and compute yaw, pitch, roll error.
-
-    REFERENCE
-    https://github.com/natanielruiz/deep-head-pose/blob/f7bbb9981c2953c2eca67748d6492a64c8243946/code/test_hopenet.py#L100
-    """
-
-    def __init__(self, visualize_dir: Optional[str] = None, **kwargs):
-        """
-        Args:
-            visualize_dir (Optional[str], optional): the flag to save visualization result
-            to ./outputs/visualization/epoch{epoch}/*.jpg. Defaults to None.
-        **kwargs:
-            additional keyword arguments about `torchmetric.Metric`
-        """
-        super().__init__(**kwargs)
-        self.visualize_dir = visualize_dir
-        if visualize_dir is None:
-            self._visualize = False
+    @staticmethod
+    def create_dataloaders(
+        args: argparse.Namespace, batch_size: int, is_train: bool = False
+    ) -> torch.utils.data.DataLoader:
+        """Initialize dataloaders (train, eval)"""
+        if is_train:
+            dataset_name = "Pose_300W_LP"
+            transform = [torchvision.transforms.RandomResizedCrop(size=224, scale=(0.8, 1))]
+            data_dir = args.data_path.joinpath("300W_LP")
         else:
-            self._visualize = True
+            dataset_name = "AFLW2000"
+            transform = [
+                torchvision.transforms.Resize(256),
+                torchvision.transforms.CenterCrop(224),
+            ]
+            data_dir = args.data_path.joinpath("AFLW2000")
+        transform += [
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+        transform = torchvision.transforms.Compose(transform)
 
-        self.epoch = 0
-        self.save_dir = self._get_save_dir()
-        if self.save_dir.exists():
-            shutil.rmtree(str(self.save_dir))  # reset every run
-        self.save_dir.mkdir(parents=True, exist_ok=True)
-
-        self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
-        self.add_state("yaw_error", default=torch.tensor(0, dtype=torch.float32), dist_reduce_fx="sum")
-        self.add_state("pitch_error", default=torch.tensor(0, dtype=torch.float32), dist_reduce_fx="sum")
-        self.add_state("roll_error", default=torch.tensor(0, dtype=torch.float32), dist_reduce_fx="sum")
-
-    def _get_save_dir(self):
-        return BASE_DIR / Path(f"{self.visualize_dir}/epoch{self.epoch}")
-
-    def _cal_err(self, pred_deg, gt_deg):
-        _stacked = torch.stack(
-            (
-                torch.abs(gt_deg - pred_deg),
-                torch.abs(pred_deg + 360 - gt_deg),
-                torch.abs(pred_deg - 360 - gt_deg),
-                torch.abs(pred_deg + 180 - gt_deg),
-                torch.abs(pred_deg - 180 - gt_deg),
-            )
+        dataset = getDataset(
+            dataset=dataset_name,
+            data_dir=str(data_dir),
+            filename_list=str(data_dir.joinpath("files.txt")),
+            transformations=transform,
         )
-        return torch.sum(torch.min(_stacked, 0)[0])
 
-    def update(self, outputs: torch.Tensor, targets: tuple) -> None:
-        _device = outputs.device
-        R_pred = utils.compute_rotation_matrix_from_ortho6d(outputs)
-        r_label, cont_labels, name = targets
-        r_label = r_label.to(_device)
-        cont_labels = cont_labels.to(_device)
+        data_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size if is_train else 1,  # TODO: batched evaluation
+            num_workers=args.workers,
+            pin_memory=False,
+            shuffle=True if is_train else False,
+        )
+        return data_loader
 
-        self.total += cont_labels.size(0)
-
-        # gt euler
-        y_gt_deg = cont_labels[:, 0].float() * 180 / torch.pi
-        p_gt_deg = cont_labels[:, 1].float() * 180 / torch.pi
-        r_gt_deg = cont_labels[:, 2].float() * 180 / torch.pi
-
-        euler = utils.compute_euler_angles_from_rotation_matrices(R_pred) * 180 / np.pi
-        p_pred_deg = euler[:, 0]
-        y_pred_deg = euler[:, 1]
-        r_pred_deg = euler[:, 2]
-
-        _pitch_error = self._cal_err(p_pred_deg, p_gt_deg).to(_device)
-        _yaw_error = self._cal_err(y_pred_deg, y_gt_deg).to(_device)
-        _roll_error = self._cal_err(r_pred_deg, r_gt_deg).to(_device)
-        self.pitch_error += _pitch_error
-        self.yaw_error += _yaw_error
-        self.roll_error += _roll_error
-
-        if self._visualize:
-            _idx = 0
-            img = cv2.imread(f"{BASE_DIR}/6DRepNet/sixdrepnet/datasets/AFLW2000/{name[_idx]}.jpg")
-            utils.draw_axis(img, y_pred_deg[0], p_pred_deg[0], r_pred_deg[0], tdx=200, tdy=200, size=100)
-            _y = torch.abs(y_pred_deg - y_gt_deg).item()
-            _p = torch.abs(p_pred_deg - p_gt_deg).item()
-            _r = torch.abs(r_pred_deg - r_gt_deg).item()
-            _error_string = f"y {_y:.2f}, p {_p:.2f}, r {_r:.2f}"
-            cv2.putText(
-                img, _error_string, (30, img.shape[0] - 30), fontFace=1, fontScale=1, color=(0, 0, 255), thickness=2
+    def train_dataloader(self):
+        if self._train_loader is None or self._train_loader.batch_size != self.train_batch_size:
+            self._train_loader = self.create_dataloaders(
+                args=self._args, batch_size=self.train_batch_size, is_train=True
             )
-            while self.save_dir.exists() and len(list(self.save_dir.iterdir())) == 1969:
-                self.epoch += 1
-                self.save_dir = self._get_save_dir()
-            self.save_dir.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(self.save_dir.joinpath(f"{name[_idx]}.jpg")), img)
+        return self._train_loader
 
-    def compute(self):
-        yaw = self.yaw_error / self.total
-        pitch = self.pitch_error / self.total
-        roll = self.roll_error / self.total
-        return {
-            "yaw": yaw,
-            "pitch": pitch,
-            "roll": roll,
-            "total": yaw + pitch + roll,
-        }
+    def test_dataloader(self):
+        if self._test_loader is None or self._test_loader.batch_size != self.test_batch_size:
+            self._test_loader = self.create_dataloaders(
+                args=self._args, batch_size=self.test_batch_size, is_train=False
+            )
+        return self._test_loader
+
+    def val_dataloader(self) -> EVAL_DATALOADERS:
+        return self.test_dataloader()
 
 
-# ==================================================================================================================== #
+class SixDRepNetModule(pl.LightningModule):
+    _args: argparse.Namespace
+    _model: torch.nn.Module
+    _total_sum_metric: SumMetric
+    _loss_fn: GeodesicLoss
+    BEST_CKPT_METRIC_NAME: str = "val/loss_total"
+    BEST_CKPT_METRIC_NAME_MODE: str = "min"
+    _grad_scaler: torch.cuda.amp.GradScaler
+    _autocast_ctx: torch.cuda.amp.autocast
+
+    def __init__(self, args: argparse.Namespace):
+        super().__init__()
+        self._args = args
+        self.automatic_optimization = False
+
+        """MODEL"""
+        self._model = SixDRepNet(
+            backbone_name="RepVGG-B1g2",
+            backbone_file=str(BASE_DIR.joinpath("checkpoints", "6DRepNet_300W_LP_AFLW2000.pth")),
+            deploy=True,
+            pretrained=False,
+        ).to(self._args.device)
+
+        """METRIC"""
+        self._total_sum_metric = SumMetric()
+
+        """LOSS"""
+        self._loss_fn = GeodesicLoss()
+
+        """ETC"""
+        self.save_hyperparameters(vars(args))
+
+        # we create the GradScaler with enabled=True so that it initializes the internal vars
+        if utils.is_dist_avail_and_initialized():
+            self._grad_scaler = ShardedGradScaler(enabled=True)
+        else:
+            self._grad_scaler = torch.cuda.amp.GradScaler(enabled=True)
+        self._grad_scaler._enabled = False
+        self._autocast_ctx = nullcontext()
+        if self._args.amp is not None:
+            if self._args.amp == "fp16":
+                self._autocast_ctx = torch.cuda.amp.autocast(dtype=torch.float16, cache_enabled=False)
+                self._grad_scaler._enabled = True
+            else:
+                # bf16
+                self._autocast_ctx = torch.cuda.amp.autocast(dtype=torch.bfloat16, cache_enabled=False)
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        self._model.zero_grad(set_to_none)
+
+    def training_step(self, batch, batch_idx: int) -> STEP_OUTPUT:
+        """Return training loss"""
+        xs, ys, _, _ = batch
+        xs = xs.cuda()
+        ys = ys.cuda()
+        with self._autocast_ctx:
+            y_hat = self._model(xs)
+            loss = self._loss_fn(y_hat, ys)
+        self.log("train/loss", loss.detach(), prog_bar=True)
+        self.manual_backward(loss)
+        return loss
+
+    def test_step(self, batch, batch_idx: int, prefix: str = "test") -> STEP_OUTPUT:
+        """Collect logits and postprocess"""
+        xs, ys, _, _ = batch
+        xs = xs.cuda()
+        ys = ys.cuda()
+        with self._autocast_ctx:
+            y_hat = self._model(xs)
+            loss = self._loss_fn(y_hat, ys)
+        self._total_sum_metric.update(loss)
+        return None
+
+    def validation_step(self, *args, **kwargs) -> STEP_OUTPUT:
+        return self.test_step(*args, **kwargs, prefix="val")
+
+    def configure_gradient_clipping(
+        self,
+        optimizer: Optimizer,
+        gradient_clip_val: Optional[Union[int, float]] = None,
+        gradient_clip_algorithm: Optional[str] = None,
+    ) -> None:
+        """Clip gradients attached to `model.parameters()`"""
+        if gradient_clip_val is None:
+            return
+
+        gradient_clip_algorithm = gradient_clip_algorithm or "norm"  # type: Optional[Literal["norm", "value"]]
+        if gradient_clip_algorithm == "norm":
+            norm_type = 2.0
+        elif gradient_clip_algorithm == "value":
+            norm_type = 1.0
+
+        if hasattr(self._model, "clip_grad_norm_"):  # FSDP
+            norm: torch.Tensor = self._model.clip_grad_norm_(max_norm=gradient_clip_val, norm_type=norm_type)
+        else:  # DDP, SingleGPU
+            norm: torch.Tensor = torch.nn.utils.clip_grad_norm_(
+                parameters=self._model.parameters(), max_norm=gradient_clip_val, norm_type=norm_type
+            )
+        self.log("train/grad_norm", norm, prog_bar=True)
+
+    def manual_backward(self, loss: torch.Tensor, **kwargs) -> None:
+        optimizer = self.optimizers(use_pl_optimizer=True)
+        loss_scaled = self._grad_scaler.scale(loss)  # scale fp16 loss
+        loss_scaled.backward()
+        self._grad_scaler.unscale_(optimizer)  # unscale gradients inside optimizer
+        self.configure_gradient_clipping(None, self._args.clip_grad_norm)  # clip unscaled gradients
+        self._grad_scaler.step(optimizer)  # optimizer.step()
+        self._grad_scaler.update()  # update grad scaler
+
+    def on_train_batch_start(self, batch: Any, batch_idx: int) -> Optional[int]:
+        """Called in the training loop before anything happens for that batch"""
+        self.zero_grad()
+
+    def on_train_batch_end(self, outputs: STEP_OUTPUT, batch: Any, batch_idx: int) -> None:
+        """Called in the training loop after the batch"""
+        optimizer = self.optimizers(use_pl_optimizer=True)
+        scheduler = self.lr_schedulers()
+        self.zero_grad(set_to_none=True)
+        scheduler.step()
+        lr: float = [g["lr"] for g in optimizer.param_groups][0]
+        self.log("train/lr", lr, prog_bar=True)
+
+    def on_train_epoch_start(self) -> None:
+        """Called in the training loop at the very beginning of the epoch"""
+        pass
+
+    def on_train_epoch_end(self) -> None:
+        """Called in the training loop at the very end of the epoch"""
+        pass
+
+    def on_test_epoch_start(self) -> None:
+        """Reset metrics before the test loop begin"""
+        self._total_sum_metric.reset()
+
+    def on_test_epoch_end(self, prefix: str = "test") -> None:
+        """Compute metrics"""
+        _avg: torch.Tensor = self._total_sum_metric.compute() / self._total_sum_metric.update_count
+        self.log(f"{prefix}/loss_total", _avg, on_epoch=True)
+        self._total_sum_metric.reset()
+
+    def on_validation_epoch_start(self) -> None:
+        """Called in the validation loop at the very beginning of the epoch"""
+        self.on_test_epoch_start()
+
+    def on_validation_epoch_end(self):
+        """Called in the validation loop at the very end of the epoch"""
+        self.on_test_epoch_end("val")
+
+    def configure_optimizers(self):
+        """Configure optimizer and LRScheduler used for training"""
+        optimizer = torch.optim.Adam(self._model.parameters(), lr=self._args.lr)
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=self._args.steps_per_epoch // 2, eta_min=self._args.lr * 0.75
+        )
+        return [optimizer], [lr_scheduler]
+
+    def initialize_clika(self, data_module: Pose300W_AFLW2000_DataModule) -> None:
+        """Initialize CLIKAModule - Wrap `nn.Module` with `ClikaModule`"""
+        train_dataloader = data_module.train_dataloader()
+        example_inputs = next(iter(train_dataloader))[0]
+        self._model.to(self._args.device)
+        self._model: ClikaModule = torch.compile(
+            self._model,
+            backend="clika",
+            options={
+                "settings": self._args.clika_config,
+                "example_inputs": example_inputs,
+                "train_dataloader": train_dataloader,
+                "discard_input_model": True,
+                "logs_dir": os.path.join(self._args.output_dir, "logs"),
+                "apply_on_data_fn": lambda x: x[0],
+            },
+        )
+        self._model.clika_visualize(os.path.join(self._args.output_dir, f"sixdrepnet.svg"))
+        state_dict = self._model.clika_serialize()
+        if utils.is_main_process():
+            torch.save(state_dict, os.path.join(self._args.output_dir, f"sixdrepent_init.pompom"))
+        torch.onnx.export(
+            model=self._model,
+            args=example_inputs.cuda(),
+            f=os.path.join(self._args.output_dir, f"sixdrepent_init.onnx"),
+            input_names=["x"],
+            output_names=["out"],
+            dynamic_axes={
+                "x": {
+                    0: "batch_size",
+                    2: "W",
+                    3: "H",
+                }
+            },
+        )
+
+
+def evaluate_original(trainer: pl.Trainer, module: SixDRepNetModule, data_module: Pose300W_AFLW2000_DataModule) -> dict:
+    results = trainer.test(model=module, datamodule=data_module, verbose=True if utils.is_main_process() else False)[0]
+    results = {f"original/{k}": v for k, v in results.items()}
+    return results
 
 
 def parse_args() -> argparse.Namespace:
     # fmt: off
-    _model_name = "sixdrepnet"
-    parser = argparse.ArgumentParser(description=f"CLIKA {_model_name} Example")
+    parser = argparse.ArgumentParser(description="CLIKA 6dREPNET Example")
 
-    ace_parser = parser.add_argument_group("CLIKA ACE configuration")
-    ace_parser.add_argument("--config", type=str, default="config.yml", help="ACE config yaml path")
+    ace_parser = parser.add_argument_group("General configuration")
+    ace_parser.add_argument("--clika_config", type=Path, default="local/clika_config.yaml", help="ACE config yaml path")
+    ace_parser.add_argument("--output_dir", type=Path, default=None, help="Path to save clika related files for the SDK")
+    ace_parser.add_argument("--data_path", type=Path, default=BASE_DIR.joinpath("6DRepNet", "sixdrepnet", "datasets"), help="Dataset directory")
+    ace_parser.add_argument("--resume", type=Path, default=None, help="Path to load the model checkpoints (e.g. .pth)")
 
-    model_parser = parser.add_argument_group("Model configuration")
-    model_parser.add_argument("--output_dir", type=Path, default="outputs", help="Path to save clika related files for the SDK")
-    model_parser.add_argument("--data", type=Path, default="6DRepNet/sixdrepnet/datasets", help="Dataset directory")
-    model_parser.add_argument("--ckpt", type=Path, default="6DRepNet_300W_LP_AFLW2000.pth", help="Path to load the model checkpoints (e.g. .pth, .pompom)")
-    model_parser.add_argument("--batch_size", type=int, default=80, help="Batch size for training and evaluation (default: 80)")
-    model_parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
-    model_parser.add_argument("--workers", type=int, default=4, help="Number of worker processes for data loading (default: 4)")
+    train_parser = parser.add_argument_group("Train configuration")
+    train_parser.add_argument("--epochs", type=int, default=200, help="Number of epochs (default 200)")
+    train_parser.add_argument("--steps_per_epoch", type=int, default=100, help="Steps per epoch (default 100)")
+    train_parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for the optimizer (default: 1e-5)")
+    train_parser.add_argument("--batch_size", type=int, default=16, help="Train, Evaluation batch size")
+    train_parser.add_argument("--workers", type=int, default=3, help="Number of worker processes for data loading (default: 3)")
+    train_parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay for the optimizer")
+    train_parser.add_argument("--amp", type=str, default=None, choices=["fp16", "bf16", None], help="autocast dtype")
+    train_parser.add_argument("--clip_grad_norm", type=float, default=1.0, help="Max grad norm (0 to disable)")
+
+    eval_parser = parser.add_argument_group("Evaluation configuration")
+    # TODO: save eval visualization folder
+
+    gpu_parser = parser.add_argument_group("GPU configuration")
+    gpu_parser.add_argument("--gpu", type=int, default=0, help="GPU id to run on")
+    gpu_parser.add_argument("--world_size", default=1, type=int, help="Number of distributed processes")
+    gpu_parser.add_argument("--dist_url", default="env://", type=str, help="Url used to set up distributed training")
+
+    etc_parser = parser.add_argument_group("ETC configuration")
+    etc_parser.add_argument("--random_seed", type=int, default=373737, help="Random Seed")
+    etc_parser.add_argument("--use_deterministic_algorithms", action="store_true", help="Whether or not to use deterministic algorithms. will slow down training")
+    etc_parser.add_argument("--print_freq", type=int, default=1, help="Printing frequency")
+    etc_parser.add_argument("--dry_run", action="store_true", help="Whether to run the initial calibration without further fine tuning")
 
     args = parser.parse_args()
 
-    if args.data.exists() is False:
-        raise FileNotFoundError(f"Unknown directory: {args.data}")
-    # fmt: on
+    pl.seed_everything(args.random_seed)
+    args.clip_grad_norm = None if args.clip_grad_norm == 0 else args.clip_grad_norm
+
+    if not args.data_path.exists():
+        raise FileNotFoundError(f"Cannot locate data directory at: `{args.data_path}`")
+    if not args.clika_config.exists():
+        raise FileNotFoundError(f"Cannot locate clika config at: `{args.clika_config}`")
+    with open(args.clika_config, "r") as fp:
+        args.clika_config_yaml = yaml.safe_load(fp)
+    args.clika_config = str(args.clika_config)
+
+    args.output_dir = args.output_dir or BASE_DIR.joinpath("outputs")
+    args.output_dir = os.path.join(args.output_dir, args.clika_config_yaml["deployment_settings"]["target_framework"])
+    utils.init_distributed_mode(args)
+    if not utils.is_dist_avail_and_initialized():
+        torch.cuda.set_device(args.gpu)
+    if utils.is_main_process():
+        os.makedirs(args.output_dir, exist_ok=True)
+
+    if torch.cuda.is_available():
+        args.device = f"cuda:{args.gpu}"
+    else:
+        args.device = "cpu"
 
     return args
 
 
 def main():
     args = parse_args()
-    settings = Settings.load_from_path(args.config)
+    module = SixDRepNetModule(args=args)
+    data_module = Pose300W_AFLW2000_DataModule(args)
 
-    pprint(args)
-    pprint(settings)
-    _train_from_scratch = settings.training_settings.is_training_from_scratch
-    if (_train_from_scratch is True) and (args.ckpt is not None):
-        warnings.warn(
-            f"Conflicting arguments `train_from_scratch={_train_from_scratch}` and `ckpt={args.ckpt}` "
-            f"=> Enable `train_from_scratch` and ignore ckpt"
-        )
-
-    """
-    Define Model
-    ====================================================================================================================
-    """
-
-    model = SixDRepNetWrapper(
-        backbone_name="RepVGG-B1g2",
-        backbone_file=str(args.ckpt),
-        deploy=True,
-        pretrained=False,
+    callbacks: list = [
+        ModelCheckpoint(
+            monitor=module.BEST_CKPT_METRIC_NAME,
+            mode=module.BEST_CKPT_METRIC_NAME_MODE,
+            dirpath=args.output_dir,
+            save_on_train_epoch_end=True,
+            filename="epoch-{epoch}-loss_total-{val/loss_total:3.5f}",
+            save_top_k=1,
+            auto_insert_metric_name=False,
+            verbose=True,
+        ),
+        RichModelSummary(),
+    ]
+    tqdm_progress_bar_callback: Optional[TQDMProgressBar] = None
+    if utils.is_main_process():
+        tqdm_progress_bar_callback = TQDMProgressBar()
+        callbacks.append(tqdm_progress_bar_callback)
+    trainer = pl.Trainer(
+        max_epochs=args.epochs,
+        limit_train_batches=args.steps_per_epoch,
+        precision=None,
+        deterministic=args.use_deterministic_algorithms,
+        accelerator="gpu" if "cuda" in args.device else args.device,
+        devices=[args.gpu] if torch.cuda.is_available() else "auto",
+        log_every_n_steps=args.print_freq,
+        enable_progress_bar=True if utils.is_main_process() else False,
+        callbacks=callbacks,
+        default_root_dir=args.output_dir,
     )
-    torch.fx.symbolic_trace(model)
-
-    _resume = False
-    if (_train_from_scratch is False) and (args.ckpt is not None):
-        if args.ckpt.suffix == ".pompom":
-            print("[INFO] .pompom file provided as ckpt, resuming compression ...")
-            _resume = True
-        else:
-            print(f"[INFO] loading custom ckpt from {args.ckpt}")
-            state_dict = torch.load(str(args.ckpt))
-            model.load_state_dict(state_dict)
-
-    """
-    Define Dataloaders
-    ====================================================================================================================
-    """
-    get_train_loader = partial(
-        get_loader,
-        data_dir=args.data,
-        batch_size=args.batch_size,
-        num_workers=args.workers,
-        is_train=True,
-    )
-    get_eval_loader = partial(
-        get_loader,
-        data_dir=args.data,
-        batch_size=args.batch_size,
-        num_workers=args.workers,
-        is_train=False,
-    )
-
-    """
-    Define Optimizer
-    ====================================================================================================================
-    """
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=args.lr)
-
-    """
-    Define Loss Function
-    ====================================================================================================================
-    """
-    criterion = CriterionWrapper()
-    train_losses = {"train_loss": criterion}
-    eval_losses = {"eval_loss": criterion}
-
-    """
-    Define Metric Wrapper
-    ====================================================================================================================
-    """
-    metric_fn = MetricWrapper(visualize_dir=str(args.output_dir.joinpath("visualization")))
-    train_metrics = None  # {"train(AFLW2000)": metric_fn}
-    eval_metrics = {"eval_metric": metric_fn}
-
-    """
-    RUN Compression
-    ====================================================================================================================
-    """
-    if _resume is True:
-        clika_resume(
-            clika_state_path=args.ckpt,
-            init_training_dataset_fn=get_train_loader,
-            init_evaluation_dataset_fn=get_eval_loader,
-            optimizer=optimizer,
-            training_losses=train_losses,
-            training_metrics=train_metrics,
-            evaluation_losses=eval_losses,
-            evaluation_metrics=eval_metrics,
-            callbacks=[TensorBoardCallback(output_path=args.output_dir)],
-            new_settings=settings,
-            resume_start_epoch=None,
-        )
-    else:
-        clika_compress(
-            output_path=args.output_dir,
-            settings=settings,
-            model=model,
-            init_training_dataset_fn=get_train_loader,
-            init_evaluation_dataset_fn=get_eval_loader,
-            optimizer=optimizer,
-            training_losses=train_losses,
-            training_metrics=train_metrics,
-            evaluation_losses=eval_losses,
-            evaluation_metrics=eval_metrics,
-            callbacks=[TensorBoardCallback(output_path=args.output_dir)],
-        )
+    trainer.print(f"Args {args}\n")
+    original_test_results: Optional[dict] = None
+    if not args.dry_run:
+        original_test_results = evaluate_original(trainer=trainer, module=module, data_module=data_module)
+    module.initialize_clika(data_module)
+    if args.dry_run:
+        return
+    if tqdm_progress_bar_callback is not None and original_test_results is not None:
+        tqdm_progress_bar_callback.original_test_results = original_test_results
+    utils.override_pl_strategy(trainer, args)  # we override the strategy so Distributed Training works properly with PL
+    trainer.fit(model=module, datamodule=data_module, ckpt_path=args.resume)
+    if utils.is_dist_avail_and_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

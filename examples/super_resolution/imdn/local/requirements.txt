@@ -1,7 +1,0 @@
-matplotlib==3.7.1
-opencv_python==4.7.0.72
-Pillow==9.5.0
-rich
-scikit-image==0.19.3
-tabulate
-torchmetrics==1.3.1

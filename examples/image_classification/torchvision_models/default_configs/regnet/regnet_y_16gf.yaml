@@ -1,8 +1,0 @@
-epochs: 100
-batch_size: 32
-weight_decay: 0.00005
-lr: 0.2
-lr_scheduler: cosineannealinglr
-lr_warmup_method: linear
-lr_warmup_epochs: 5
-lr_warmup_decay: 0.1

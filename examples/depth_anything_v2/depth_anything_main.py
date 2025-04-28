@@ -64,7 +64,7 @@ def main():
 
     all_model_names = [
         "depth-anything/Depth-Anything-V2-Small-hf",  # 24.8M
-        "depth-anything/Depth-Anything-V2-Base-hf",  # 97.5M
+        "depth-anything/Depth-Anything-V2-Base-hf",   # 97.5M
         "depth-anything/Depth-Anything-V2-Large-hf",  # 335M
     ]
     for deployment_settings in all_deployment_settings:
